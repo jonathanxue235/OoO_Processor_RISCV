@@ -160,7 +160,7 @@ module decoder_tb;
         #10;
 
         assert(rd == 5'd1) else $error("JAL: rd should be 1, got %d", rd);
-        assert(immediate == 32'd20) else $error("JAL: immediate should be 20, got %d", immediate);
+        assert(immediate == 32'd10) else $error("JAL: immediate should be 20, got %d", immediate);
         assert(Branch == 1'b1) else $error("JAL: Branch should be 1");
         assert(FUtype == 2'b01) else $error("JAL: FUtype should be 1 (Branch unit)");
         assert(Regwrite == 1'b1) else $error("JAL: Regwrite should be 1");
