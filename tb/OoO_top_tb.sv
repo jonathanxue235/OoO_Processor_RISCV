@@ -10,6 +10,8 @@ module OoO_top_tb;
     // Clock and Reset
     logic clk;
     logic rst;
+    logic [8:0] locked_decode_pc;
+    T locked_decode_instr;
 
     // =========================================================================
     // DUT Instantiation
@@ -402,8 +404,7 @@ module OoO_top_tb;
         $display("\n[Test 10] Skid Buffer Backpressure Test");
 
         // Capture current state
-        logic [8:0] locked_decode_pc;
-        T locked_decode_instr;
+        
 
         @(posedge clk);
         #1;
