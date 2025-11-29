@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 module free_list #(
-    parameter PREG_WIDTH = 6 // 64 Registers
+    parameter PREG_WIDTH = 7 // 128 Registers
 ) (
     input logic clk,
     input logic reset,

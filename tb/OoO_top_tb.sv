@@ -195,6 +195,9 @@ module OoO_top_tb;
         $dumpfile("OoO_top_tb.vcd");
         $dumpvars(0, OoO_top_tb);
 
+        // Simulate downstream stage (rename) being ready since it's not connected yet
+        force dut.skid_to_decode_ready = 1'b1;
+
         // --- Test 1: Reset Behavior ---
         $display("\n[Test 1] Reset Behavior");
         rst = 1;
@@ -411,8 +414,8 @@ module OoO_top_tb;
         locked_decode_pc = dut.skid_to_decode_pc;
         locked_decode_instr = dut.skid_to_decode_instr;
 
-        // Simulate decode stage not ready (backpressure)
-        force dut.decode_to_skid_ready = 1'b0;
+        // Simulate downstream stage (rename) not ready (backpressure)
+        force dut.skid_to_decode_ready = 1'b0;
 
         repeat(3) @(posedge clk);
         #1;
@@ -425,7 +428,7 @@ module OoO_top_tb;
             else $error("Backpressure: Instruction changed during stall");
 
         // Release backpressure
-        release dut.decode_to_skid_ready;
+        force dut.skid_to_decode_ready = 1'b1;
 
         @(posedge clk);
         #1;
