@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-module fetch#(
+module fetcher #(
     parameter type T = logic [31:0]
 ) (
     input logic      clk,

@@ -23,7 +23,7 @@ module pipe_skid_buffer #(
 ) 
 (
    input  logic                clk             ,           // Clock
-   input  logic                rstn            ,           // Active-low synchronous reset
+   input  logic                reset           ,           // Active-high synchronous reset
    
    // Input Interface   
    input  logic [DWIDTH-1 : 0] i_data          ,           // Data in
@@ -55,8 +55,8 @@ logic                ready                 ;        // Pipeline ready signal
    Synchronous logic 
 -------------------------------------------------------------------------------------------------------------------------------*/
 always @(posedge clk) begin
-   // Reset  
-   if (!rstn) begin      
+   // Reset
+   if (reset) begin      
       // Internal Registers
       state_rg           <= PIPE ;
       data_rg            <= '0   ;     
