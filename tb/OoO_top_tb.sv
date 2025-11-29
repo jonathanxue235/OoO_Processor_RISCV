@@ -93,7 +93,7 @@ module OoO_top_tb;
         #1;
 
         // ADD x1, x2, x3 (R-type: x1 = x2 + x3)
-        dut.instruction_memory.memory[0] = create_r_type(
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[0] = create_r_type(
             7'b0110011,  // opcode: R-type
             5'd1,        // rd = x1
             3'b000,      // funct3 = ADD
@@ -103,7 +103,7 @@ module OoO_top_tb;
         );
 
         // ADDI x4, x5, 100 (I-type: x4 = x5 + 100)
-        dut.instruction_memory.memory[1] = create_i_type(
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[1] = create_i_type(
             7'b0010011,  // opcode: I-type ALU
             5'd4,        // rd = x4
             3'b000,      // funct3 = ADDI
@@ -112,7 +112,7 @@ module OoO_top_tb;
         );
 
         // LW x6, 8(x7) (I-type Load: x6 = MEM[x7 + 8])
-        dut.instruction_memory.memory[2] = create_i_type(
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[2] = create_i_type(
             7'b0000011,  // opcode: Load
             5'd6,        // rd = x6
             3'b010,      // funct3 = LW
@@ -121,7 +121,7 @@ module OoO_top_tb;
         );
 
         // SW x8, 12(x9) (S-type: MEM[x9 + 12] = x8)
-        dut.instruction_memory.memory[3] = create_s_type(
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[3] = create_s_type(
             7'b0100011,  // opcode: Store
             3'b010,      // funct3 = SW
             5'd9,        // rs1 = x9
@@ -130,7 +130,7 @@ module OoO_top_tb;
         );
 
         // BEQ x10, x11, 16 (B-type: if x10 == x11, PC += 16)
-        dut.instruction_memory.memory[4] = create_b_type(
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[4] = create_b_type(
             7'b1100011,  // opcode: Branch
             3'b000,      // funct3 = BEQ
             5'd10,       // rs1 = x10
@@ -139,28 +139,28 @@ module OoO_top_tb;
         );
 
         // LUI x12, 0x12345 (U-type: x12 = 0x12345000)
-        dut.instruction_memory.memory[5] = create_u_type(
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[5] = create_u_type(
             7'b0110111,  // opcode: LUI
             5'd12,       // rd = x12
             32'h12345000 // imm = 0x12345
         );
 
         // AUIPC x13, 0x1000 (U-type: x13 = PC + 0x1000000)
-        dut.instruction_memory.memory[6] = create_u_type(
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[6] = create_u_type(
             7'b0010111,  // opcode: AUIPC
             5'd13,       // rd = x13
             32'h01000000 // imm = 0x1000
         );
 
         // JAL x14, 32 (J-type: x14 = PC + 4, PC += 32)
-        dut.instruction_memory.memory[7] = create_j_type(
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[7] = create_j_type(
             7'b1101111,  // opcode: JAL
             5'd14,       // rd = x14
             21'd32       // imm = 32
         );
 
         // JALR x15, 8(x16) (I-type: x15 = PC + 4, PC = x16 + 8)
-        dut.instruction_memory.memory[8] = create_i_type(
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[8] = create_i_type(
             7'b1100111,  // opcode: JALR
             5'd15,       // rd = x15
             3'b000,      // funct3 = JALR
@@ -169,7 +169,7 @@ module OoO_top_tb;
         );
 
         // SUB x17, x18, x19 (R-type: x17 = x18 - x19)
-        dut.instruction_memory.memory[9] = create_r_type(
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[9] = create_r_type(
             7'b0110011,  // opcode: R-type
             5'd17,       // rd = x17
             3'b000,      // funct3 = ADD/SUB

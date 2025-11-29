@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 module free_list #(
-    parameter PREG_WIDTH = 7 // 128 Registers
+    parameter PREG_WIDTH = 6 // 64 Registers
 ) (
     input logic clk,
     input logic reset,
@@ -20,7 +20,7 @@ module free_list #(
     input logic branch_mispredict   // Restore Head Pointer
 );
 
-    localparam NUM_PREGS = 1 << PREG_WIDTH; // 128
+    localparam NUM_PREGS = 1 << PREG_WIDTH; // 64
     localparam NUM_AREGS = 32;              // 32 Architectural Regs
 
     // The Free List Queue
@@ -53,10 +53,12 @@ module free_list #(
             
             // Initialize Free List
             // We cannot put P0-P31 in free list initially because they are mapped to x0-x31
-            // So we fill free list with P32, P33, ... P127
+            // So we fill free list with P32, P33, ... P63
             for (int i = 0; i < NUM_PREGS; i++) begin
                 if (i < (NUM_PREGS - NUM_AREGS)) begin
-                    free_list_queue[i] <= (i + NUM_AREGS)[PREG_WIDTH-1:0];
+                    // FIX: Removed [PREG_WIDTH-1:0] slicing on expression
+                    // Implicit truncation handles the width automatically.
+                    free_list_queue[i] <= i + NUM_AREGS;
                 end else begin
                     free_list_queue[i] <= '0;
                 end
