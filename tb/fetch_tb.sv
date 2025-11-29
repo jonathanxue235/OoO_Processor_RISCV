@@ -9,17 +9,16 @@ module fetch_tb;
 
     // Parameters
     parameter CLK_PERIOD = 10;  // 10ns clock period (100MHz)
-    parameter type T = logic [31:0];
 
     // Testbench signals
     logic clk;
     logic reset;
     logic take_branch;
-    T branch_loc;
-    T instr_from_cache;
-    T pc_to_cache;
-    T instr_to_decode;
-    T pc_to_decode;
+    logic [31:0] branch_loc;
+    logic [31:0] instr_from_cache;
+    logic [31:0] pc_to_cache;
+    logic [31:0] instr_to_decode;
+    logic [31:0] pc_to_decode;
     logic ready;
     logic valid;
 
@@ -30,12 +29,18 @@ module fetch_tb;
     // Test tracking
     integer test_num;
     integer errors;
+    integer i;  // Loop variable
+
+    // Saved state variables for Test 3
+    logic [31:0] saved_pc;
+    logic [31:0] saved_instr;
+    logic saved_valid;
 
     //////////////////////////////////////////////////////////////////////////
     // DUT Instantiation
     //////////////////////////////////////////////////////////////////////////
     fetch #(
-        .T(T)
+        .T(logic [31:0])
     ) dut (
         .clk(clk),
         .reset(reset),
@@ -63,7 +68,7 @@ module fetch_tb;
     initial begin
         // Initialize instruction memory with test program
         // NOP = 0x00000013 (ADDI x0, x0, 0)
-        for (int i = 0; i < 512; i++) begin
+        for (i = 0; i < 512; i = i + 1) begin
             imem[i] = 32'h00000013;  // Default to NOP
         end
 
@@ -134,7 +139,7 @@ module fetch_tb;
         #(CLK_PERIOD * 2);
 
         // Check first few fetches
-        for (int i = 0; i < 8; i++) begin
+        for (i = 0; i < 8; i = i + 1) begin
             @(posedge clk);
             #1;  // Small delay for signals to settle
 
@@ -144,17 +149,17 @@ module fetch_tb;
                 // Verify PC
                 if (pc_to_decode !== (i * 4)) begin
                     $display("  ERROR: Expected PC=0x%08h, got 0x%08h", i*4, pc_to_decode);
-                    errors++;
+                    errors = errors + 1;
                 end
 
                 // Verify instruction
                 if (instr_to_decode !== imem[i]) begin
                     $display("  ERROR: Expected Instr=0x%08h, got 0x%08h", imem[i], instr_to_decode);
-                    errors++;
+                    errors = errors + 1;
                 end
             end else begin
                 $display("  ERROR: Valid should be high during sequential fetch");
-                errors++;
+                errors = errors + 1;
             end
         end
 
@@ -182,7 +187,7 @@ module fetch_tb;
         // Check that PC was redirected
         if (pc_to_decode !== 32'h00000100) begin
             $display("  ERROR: Branch target PC incorrect. Expected 0x100, got 0x%08h", pc_to_decode);
-            errors++;
+            errors = errors + 1;
         end else begin
             $display("  Branch successful: PC=0x%08h, Instr=0x%08h", pc_to_decode, instr_to_decode);
         end
@@ -192,7 +197,7 @@ module fetch_tb;
         #1;
         if (pc_to_decode !== 32'h00000104) begin
             $display("  ERROR: PC after branch incorrect. Expected 0x104, got 0x%08h", pc_to_decode);
-            errors++;
+            errors = errors + 1;
         end else begin
             $display("  Next fetch after branch: PC=0x%08h, Instr=0x%08h", pc_to_decode, instr_to_decode);
         end
@@ -217,9 +222,9 @@ module fetch_tb;
         // Save current state
         @(posedge clk);
         #1;
-        T saved_pc = pc_to_decode;
-        T saved_instr = instr_to_decode;
-        logic saved_valid = valid;
+        saved_pc = pc_to_decode;
+        saved_instr = instr_to_decode;
+        saved_valid = valid;
 
         $display("  Before stall: PC=0x%08h, Instr=0x%08h, Valid=%b", saved_pc, saved_instr, saved_valid);
 
@@ -227,23 +232,23 @@ module fetch_tb;
         ready = 0;
 
         // Check that PC and instruction remain stable for 3 cycles
-        for (int i = 0; i < 3; i++) begin
+        for (i = 0; i < 3; i = i + 1) begin
             @(posedge clk);
             #1;
 
             if (pc_to_decode !== saved_pc) begin
                 $display("  ERROR: PC changed during stall. Expected 0x%08h, got 0x%08h", saved_pc, pc_to_decode);
-                errors++;
+                errors = errors + 1;
             end
 
             if (instr_to_decode !== saved_instr) begin
                 $display("  ERROR: Instruction changed during stall");
-                errors++;
+                errors = errors + 1;
             end
 
             if (valid !== saved_valid) begin
                 $display("  ERROR: Valid changed during stall");
-                errors++;
+                errors = errors + 1;
             end
 
             $display("  Stall cycle %0d: PC=0x%08h, Instr=0x%08h, Valid=%b", i+1, pc_to_decode, instr_to_decode, valid);
@@ -257,7 +262,7 @@ module fetch_tb;
         // Check that PC advances
         if (pc_to_decode === saved_pc) begin
             $display("  ERROR: PC did not advance after backpressure released");
-            errors++;
+            errors = errors + 1;
         end else begin
             $display("  After stall: PC=0x%08h, Instr=0x%08h", pc_to_decode, instr_to_decode);
         end
@@ -279,7 +284,7 @@ module fetch_tb;
         // Check that valid is low during reset
         if (valid !== 0) begin
             $display("  ERROR: Valid should be 0 during reset");
-            errors++;
+            errors = errors + 1;
         end
 
         // Release reset
@@ -294,7 +299,7 @@ module fetch_tb;
         // Check that PC starts from 0
         if (pc_to_decode !== 32'h00000000) begin
             $display("  ERROR: PC should start at 0x00000000 after reset, got 0x%08h", pc_to_decode);
-            errors++;
+            errors = errors + 1;
         end else begin
             $display("  Reset successful: PC=0x%08h", pc_to_decode);
         end
