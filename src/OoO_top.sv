@@ -83,7 +83,7 @@ module OoO_top #(
 
   blk_mem_gen_0 instruction_memory (
     .clka(clk),
-    .addra(fetch_to_cache_pc),
+    .addra({2'b00, fetch_to_cache_pc[8:2]}),
     .douta(cache_to_fetch_instr)
   );
   

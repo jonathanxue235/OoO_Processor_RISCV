@@ -1,199 +1,248 @@
 `timescale 1ns / 1ps
 
-module decoder_tb;
+module OoO_top_tb;
 
-    // -------------------------------------------------------------------------
+    // =========================================================================
     // Parameters & Signals
-    // -------------------------------------------------------------------------
+    // =========================================================================
     parameter type T = logic [31:0];
 
-    // Inputs
-    T instruction;
-    logic [8:0] i_pc;
-    logic i_valid;
-    logic i_ready;
+    logic clk;
+    logic rst;
 
-    // Outputs
-    logic o_ready;
-    logic [8:0] o_pc;
-    logic o_valid;
-    logic [4:0] rs1;
-    logic [4:0] rs2;
-    logic [4:0] rd;
-    logic ALUsrc;
-    logic Branch;
-    T immediate;
-    logic [1:0] ALUOp;
-    logic [1:0] FUtype;
-    logic Memread;
-    logic Memwrite;
-    logic Regwrite;
-
-    // -------------------------------------------------------------------------
+    // =========================================================================
     // DUT Instantiation
-    // -------------------------------------------------------------------------
-    decoder #(
+    // =========================================================================
+    OoO_top #(
         .T(T)
     ) dut (
-        .instruction(instruction),
-        .i_pc(i_pc),
-        .i_valid(i_valid),
-        .i_ready(i_ready),
-        .o_ready(o_ready),
-        .o_pc(o_pc),
-        .o_valid(o_valid),
-        .rs1(rs1),
-        .rs2(rs2),
-        .rd(rd),
-        .ALUsrc(ALUsrc),
-        .Branch(Branch),
-        .immediate(immediate),
-        .ALUOp(ALUOp),
-        .FUtype(FUtype),
-        .Memread(Memread),
-        .Memwrite(Memwrite),
-        .Regwrite(Regwrite)
+        .clk(clk),
+        .rst(rst)
     );
 
-    // -------------------------------------------------------------------------
-    // Test Procedure
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // Helper Functions (Instruction Builders)
+    // =========================================================================
+    function automatic T create_r_type(input logic [6:0] opcode, input logic [4:0] rd, input logic [2:0] funct3, input logic [4:0] rs1, input logic [4:0] rs2, input logic [6:0] funct7);
+        return {funct7, rs2, rs1, funct3, rd, opcode};
+    endfunction
+
+    function automatic T create_i_type(input logic [6:0] opcode, input logic [4:0] rd, input logic [2:0] funct3, input logic [4:0] rs1, input logic [11:0] imm);
+        return {imm, rs1, funct3, rd, opcode};
+    endfunction
+
+    function automatic T create_s_type(input logic [6:0] opcode, input logic [2:0] funct3, input logic [4:0] rs1, input logic [4:0] rs2, input logic [11:0] imm);
+        return {imm[11:5], rs2, rs1, funct3, imm[4:0], opcode};
+    endfunction
+
+    function automatic T create_b_type(input logic [6:0] opcode, input logic [2:0] funct3, input logic [4:0] rs1, input logic [4:0] rs2, input logic [12:0] imm);
+        return {imm[12], imm[10:5], rs2, rs1, funct3, imm[4:1], imm[11], opcode};
+    endfunction
+
+    function automatic T create_u_type(input logic [6:0] opcode, input logic [4:0] rd, input logic [31:0] imm);
+        return {imm[31:12], rd, opcode};
+    endfunction
+
+    function automatic T create_j_type(input logic [6:0] opcode, input logic [4:0] rd, input logic [20:0] imm);
+        return {imm[20], imm[10:1], imm[11], imm[19:12], rd, opcode};
+    endfunction
+
+    // =========================================================================
+    // Verification Task
+    // =========================================================================
+    task verify_decode(
+        input logic [8:0] expected_pc,
+        input string      instr_name,
+        input logic [4:0] exp_rs1,
+        input logic [4:0] exp_rs2,
+        input logic [4:0] exp_rd,
+        input T           exp_imm,
+        input logic       exp_alusrc,
+        input logic       exp_branch,
+        input logic [1:0] exp_aluop,
+        input logic [1:0] exp_futype, // 00:ALU, 01:Branch, 10:LSU
+        input logic       exp_memread,
+        input logic       exp_memwrite,
+        input logic       exp_regwrite
+    );
+        begin
+            // Wait for the instruction to appear at the output of the decode stage
+            wait(dut.decode_to_skid_valid === 1'b1 && dut.decode_to_skid_pc === expected_pc);
+            #1; // Allow signals to settle
+
+            if (dut.decode_to_skid_rs1 !== exp_rs1) $error("[%s] PC %h: rs1 mismatch. Exp %d, Got %d", instr_name, expected_pc, exp_rs1, dut.decode_to_skid_rs1);
+            if (dut.decode_to_skid_rs2 !== exp_rs2) $error("[%s] PC %h: rs2 mismatch. Exp %d, Got %d", instr_name, expected_pc, exp_rs2, dut.decode_to_skid_rs2);
+            if (dut.decode_to_skid_rd  !== exp_rd)  $error("[%s] PC %h: rd mismatch. Exp %d, Got %d", instr_name, expected_pc, exp_rd, dut.decode_to_skid_rd);
+            if (dut.decode_to_skid_immediate !== exp_imm) $error("[%s] PC %h: Imm mismatch. Exp %h, Got %h", instr_name, expected_pc, exp_imm, dut.decode_to_skid_immediate);
+            
+            if (dut.decode_to_skid_ALUsrc !== exp_alusrc) $error("[%s] PC %h: ALUsrc mismatch. Exp %b, Got %b", instr_name, expected_pc, exp_alusrc, dut.decode_to_skid_ALUsrc);
+            if (dut.decode_to_skid_Branch !== exp_branch) $error("[%s] PC %h: Branch mismatch. Exp %b, Got %b", instr_name, expected_pc, exp_branch, dut.decode_to_skid_Branch);
+            if (dut.decode_to_skid_ALUOp  !== exp_aluop)  $error("[%s] PC %h: ALUOp mismatch. Exp %b, Got %b", instr_name, expected_pc, exp_aluop, dut.decode_to_skid_ALUOp);
+            if (dut.decode_to_skid_FUtype !== exp_futype) $error("[%s] PC %h: FUtype mismatch. Exp %b, Got %b", instr_name, expected_pc, exp_futype, dut.decode_to_skid_FUtype);
+            
+            if (dut.decode_to_skid_Memread  !== exp_memread)  $error("[%s] PC %h: Memread mismatch", instr_name, expected_pc);
+            if (dut.decode_to_skid_Memwrite !== exp_memwrite) $error("[%s] PC %h: Memwrite mismatch", instr_name, expected_pc);
+            if (dut.decode_to_skid_Regwrite !== exp_regwrite) $error("[%s] PC %h: Regwrite mismatch", instr_name, expected_pc);
+
+            $display("[PASS] %s (PC: %h) decoded successfully.", instr_name, expected_pc);
+            
+            // Wait for clock edge to proceed to next check
+            @(posedge clk); 
+        end
+    endtask
+
+    // =========================================================================
+    // Clock Generation
+    // =========================================================================
     initial begin
-        $display("=== Starting Decoder Module Testbench ===");
-        $dumpfile("decoder_tb.vcd");
-        $dumpvars(0, decoder_tb);
+        clk = 0;
+        forever #5 clk = ~clk; // 100 MHz
+    end
 
-        // Initialize control signals
-        i_pc = 9'h100;
-        i_valid = 1'b1;
-        i_ready = 1'b1;
+    // =========================================================================
+    // Main Test Procedure
+    // =========================================================================
+    initial begin
+        $dumpfile("OoO_top_tb.vcd");
+        $dumpvars(0, OoO_top_tb);
+        
+        $display("=== Starting OoO_top Testbench (Up to Decode) ===");
 
-        // --- Test 1: R-type Instruction (ADD x5, x6, x7) ---
-        $display("[Test 1] R-type: ADD x5, x6, x7");
-        instruction = 32'b0000000_00111_00110_000_00101_0110011;
-        #10;
+        // 1. Force the READY signal entering the Decoder.
+        //    Since downstream logic (rename) is commented out, we must simulate it being ready.
+        //    This signal connects to decoder port .i_ready()
+        force dut.skid_to_decode_ready = 1'b1;
 
-        assert(rs1 == 5'd6) else $error("R-type: rs1 should be 6, got %d", rs1);
-        assert(rs2 == 5'd7) else $error("R-type: rs2 should be 7, got %d", rs2);
-        assert(rd == 5'd5) else $error("R-type: rd should be 5, got %d", rd);
-        assert(ALUsrc == 1'b0) else $error("R-type: ALUsrc should be 0");
-        assert(Branch == 1'b0) else $error("R-type: Branch should be 0");
-        assert(ALUOp == 2'b10) else $error("R-type: ALUOp should be 2'b10");
-        assert(FUtype == 2'b00) else $error("R-type: FUtype should be 0 (ALU)");
-        assert(Regwrite == 1'b1) else $error("R-type: Regwrite should be 1");
-        assert(Memread == 1'b0) else $error("R-type: Memread should be 0");
-        assert(Memwrite == 1'b0) else $error("R-type: Memwrite should be 0");
+        // 2. Initialize Instruction Memory
+        //    Using hierarchical path to Xilinx BRAM instance
+        #1;
+        // PC 0: ADD x1, x2, x3
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[0] = 
+            create_r_type(7'b0110011, 5'd1, 3'b000, 5'd2, 5'd3, 7'b0000000);
+        
+        // PC 4: ADDI x4, x5, 100
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[1] = 
+            create_i_type(7'b0010011, 5'd4, 3'b000, 5'd5, 12'd100);
 
-        // --- Test 2: I-type Instruction (ADDI x5, x6, 100) ---
-        $display("[Test 2] I-type: ADDI x5, x6, 100");
-        instruction = 32'b000001100100_00110_000_00101_0010011;
-        #10;
+        // PC 8: LW x6, 8(x7)
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[2] = 
+            create_i_type(7'b0000011, 5'd6, 3'b010, 5'd7, 12'd8);
 
-        assert(rs1 == 5'd6) else $error("I-type: rs1 should be 6, got %d", rs1);
-        assert(rd == 5'd5) else $error("I-type: rd should be 5, got %d", rd);
-        assert(immediate == 32'd100) else $error("I-type: immediate should be 100, got %d", immediate);
-        assert(ALUsrc == 1'b1) else $error("I-type: ALUsrc should be 1");
-        assert(Branch == 1'b0) else $error("I-type: Branch should be 0");
-        assert(ALUOp == 2'b10) else $error("I-type: ALUOp should be 2'b10");
-        assert(FUtype == 2'b00) else $error("I-type: FUtype should be 0 (ALU)");
-        assert(Regwrite == 1'b1) else $error("I-type: Regwrite should be 1");
+        // PC 12: SW x8, 12(x9)
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[3] = 
+            create_s_type(7'b0100011, 3'b010, 5'd9, 5'd8, 12'd12);
 
-        // --- Test 3: Load Instruction (LW x5, 20(x6)) ---
-        $display("[Test 3] Load: LW x5, 20(x6)");
-        instruction = 32'b000000010100_00110_010_00101_0000011;
-        #10;
+        // PC 16: BEQ x10, x11, 16
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[4] = 
+            create_b_type(7'b1100011, 3'b000, 5'd10, 5'd11, 13'd16);
 
-        assert(rs1 == 5'd6) else $error("Load: rs1 should be 6, got %d", rs1);
-        assert(rd == 5'd5) else $error("Load: rd should be 5, got %d", rd);
-        assert(immediate == 32'd20) else $error("Load: immediate should be 20, got %d", immediate);
-        assert(ALUsrc == 1'b1) else $error("Load: ALUsrc should be 1");
-        assert(ALUOp == 2'b00) else $error("Load: ALUOp should be 2'b00");
-        assert(FUtype == 2'b10) else $error("Load: FUtype should be 2 (LSU)");
-        assert(Memread == 1'b1) else $error("Load: Memread should be 1");
-        assert(Regwrite == 1'b1) else $error("Load: Regwrite should be 1");
-        assert(Memwrite == 1'b0) else $error("Load: Memwrite should be 0");
+        // PC 20: LUI x12, 0x12345
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[5] = 
+            create_u_type(7'b0110111, 5'd12, 32'h12345000);
 
-        // --- Test 4: Store Instruction (SW x7, 24(x6)) ---
-        $display("[Test 4] Store: SW x7, 24(x6)");
-        instruction = 32'b0000000_00111_00110_010_11000_0100011;
-        #10;
+        // PC 24: AUIPC x13, 0x1000
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[6] = 
+            create_u_type(7'b0010111, 5'd13, 32'h01000000);
 
-        assert(rs1 == 5'd6) else $error("Store: rs1 should be 6, got %d", rs1);
-        assert(rs2 == 5'd7) else $error("Store: rs2 should be 7, got %d", rs2);
-        assert(immediate == 32'd24) else $error("Store: immediate should be 24, got %d", immediate);
-        assert(ALUsrc == 1'b1) else $error("Store: ALUsrc should be 1");
-        assert(ALUOp == 2'b00) else $error("Store: ALUOp should be 2'b00");
-        assert(FUtype == 2'b10) else $error("Store: FUtype should be 2 (LSU)");
-        assert(Memwrite == 1'b1) else $error("Store: Memwrite should be 1");
-        assert(Memread == 1'b0) else $error("Store: Memread should be 0");
-        assert(Regwrite == 1'b0) else $error("Store: Regwrite should be 0");
+        // PC 28: JAL x14, 32
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[7] = 
+            create_j_type(7'b1101111, 5'd14, 21'd32);
 
-        // --- Test 5: Branch Instruction (BEQ x5, x6, 8) ---
-        $display("[Test 5] Branch: BEQ x5, x6, 8");
-        instruction = 32'b0000000_00110_00101_000_01000_1100011;
-        #10;
+        // PC 32: JALR x15, 8(x16)
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[8] = 
+            create_i_type(7'b1100111, 5'd15, 3'b000, 5'd16, 12'd8);
 
-        assert(rs1 == 5'd5) else $error("Branch: rs1 should be 5, got %d", rs1);
-        assert(rs2 == 5'd6) else $error("Branch: rs2 should be 6, got %d", rs2);
-        assert(immediate == 32'd8) else $error("Branch: immediate should be 8, got %d", immediate);
-        assert(ALUsrc == 1'b0) else $error("Branch: ALUsrc should be 0");
-        assert(Branch == 1'b1) else $error("Branch: Branch should be 1");
-        assert(ALUOp == 2'b01) else $error("Branch: ALUOp should be 2'b01");
-        assert(FUtype == 2'b01) else $error("Branch: FUtype should be 1 (Branch unit)");
-        assert(Regwrite == 1'b0) else $error("Branch: Regwrite should be 0");
 
-        // --- Test 6: LUI Instruction (LUI x5, 0x12345) ---
-        $display("[Test 6] U-type: LUI x5, 0x12345");
-        instruction = 32'b00010010001101000101_00101_0110111;
-        #10;
+        // 3. Reset Sequence
+        $display("Applying Reset...");
+        rst = 1;
+        repeat(5) @(posedge clk);
+        rst = 0;
+        $display("Reset released. Pipeline should fill.");
 
-        assert(rd == 5'd5) else $error("LUI: rd should be 5, got %d", rd);
-        assert(immediate == 32'h12345000) else $error("LUI: immediate should be 0x12345000, got %h", immediate);
-        assert(ALUsrc == 1'b1) else $error("LUI: ALUsrc should be 1");
-        assert(ALUOp == 2'b11) else $error("LUI: ALUOp should be 2'b11");
-        assert(FUtype == 2'b00) else $error("LUI: FUtype should be 0 (ALU)");
-        assert(Regwrite == 1'b1) else $error("LUI: Regwrite should be 1");
+        // 4. Verification Sequence
+        // Note: Expected values derived from decoder.sv logic
+        
+        // ADD x1, x2, x3
+        verify_decode(
+            .expected_pc(9'h0), .instr_name("ADD"),
+            .exp_rs1(5'd2), .exp_rs2(5'd3), .exp_rd(5'd1), .exp_imm(32'd0), 
+            .exp_alusrc(0), .exp_branch(0), .exp_aluop(2'b10), .exp_futype(2'b00), // ALU
+            .exp_memread(0), .exp_memwrite(0), .exp_regwrite(1)
+        );
 
-        // --- Test 7: JAL Instruction (JAL x1, 20) ---
-        $display("[Test 7] J-type: JAL x1, 20");
-        instruction = 32'b0_0000000101_0_00000000_00001_1101111;
-        #10;
+        // ADDI x4, x5, 100
+        verify_decode(
+            .expected_pc(9'h4), .instr_name("ADDI"),
+            .exp_rs1(5'd5), .exp_rs2(5'd0), .exp_rd(5'd4), .exp_imm(32'd100), 
+            .exp_alusrc(1), .exp_branch(0), .exp_aluop(2'b10), .exp_futype(2'b00), // ALU
+            .exp_memread(0), .exp_memwrite(0), .exp_regwrite(1)
+        );
 
-        assert(rd == 5'd1) else $error("JAL: rd should be 1, got %d", rd);
-        assert(immediate == 32'd10) else $error("JAL: immediate should be 20, got %d", immediate);
-        assert(Branch == 1'b1) else $error("JAL: Branch should be 1");
-        assert(FUtype == 2'b01) else $error("JAL: FUtype should be 1 (Branch unit)");
-        assert(Regwrite == 1'b1) else $error("JAL: Regwrite should be 1");
+        // LW x6, 8(x7)
+        verify_decode(
+            .expected_pc(9'h8), .instr_name("LW"),
+            .exp_rs1(5'd7), .exp_rs2(5'd0), .exp_rd(5'd6), .exp_imm(32'd8), 
+            .exp_alusrc(1), .exp_branch(0), .exp_aluop(2'b00), .exp_futype(2'b10), // LSU
+            .exp_memread(1), .exp_memwrite(0), .exp_regwrite(1)
+        );
 
-        // --- Test 8: Control Signal Passthrough ---
-        $display("[Test 8] Control Signal Passthrough");
-        i_pc = 9'h1AA;
-        i_valid = 1'b0;
-        i_ready = 1'b0;
-        instruction = 32'h0; // NOP
-        #10;
+        // SW x8, 12(x9)
+        verify_decode(
+            .expected_pc(9'hC), .instr_name("SW"),
+            .exp_rs1(5'd9), .exp_rs2(5'd8), .exp_rd(5'd0), .exp_imm(32'd12), 
+            .exp_alusrc(1), .exp_branch(0), .exp_aluop(2'b00), .exp_futype(2'b10), // LSU
+            .exp_memread(0), .exp_memwrite(1), .exp_regwrite(0)
+        );
 
-        assert(o_pc == 9'h1AA) else $error("Passthrough: o_pc should match i_pc");
-        assert(o_valid == 1'b0) else $error("Passthrough: o_valid should match i_valid");
-        assert(o_ready == 1'b0) else $error("Passthrough: o_ready should match i_ready");
+        // BEQ x10, x11, 16
+        verify_decode(
+            .expected_pc(9'h10), .instr_name("BEQ"),
+            .exp_rs1(5'd10), .exp_rs2(5'd11), .exp_rd(5'd0), .exp_imm(32'd16), 
+            .exp_alusrc(0), .exp_branch(1), .exp_aluop(2'b01), .exp_futype(2'b01), // Branch
+            .exp_memread(0), .exp_memwrite(0), .exp_regwrite(0)
+        );
 
-        i_valid = 1'b1;
-        i_ready = 1'b1;
-        #10;
+        // LUI x12, 0x12345
+        verify_decode(
+            .expected_pc(9'h14), .instr_name("LUI"),
+            .exp_rs1(5'd0), .exp_rs2(5'd0), .exp_rd(5'd12), .exp_imm(32'h12345000), 
+            .exp_alusrc(1), .exp_branch(0), .exp_aluop(2'b11), .exp_futype(2'b00), // ALU
+            .exp_memread(0), .exp_memwrite(0), .exp_regwrite(1)
+        );
 
-        assert(o_valid == 1'b1) else $error("Passthrough: o_valid should be 1");
-        assert(o_ready == 1'b1) else $error("Passthrough: o_ready should be 1");
+        // AUIPC x13, 0x1000
+        verify_decode(
+            .expected_pc(9'h18), .instr_name("AUIPC"),
+            .exp_rs1(5'd0), .exp_rs2(5'd0), .exp_rd(5'd13), .exp_imm(32'h01000000), 
+            .exp_alusrc(1), .exp_branch(0), .exp_aluop(2'b00), .exp_futype(2'b00), // ALU
+            .exp_memread(0), .exp_memwrite(0), .exp_regwrite(1)
+        );
 
-        // --- Test 9: Negative Immediate (I-type with negative value) ---
-        $display("[Test 9] Negative Immediate: ADDI x5, x6, -10");
-        instruction = 32'b111111110110_00110_000_00101_0010011;
-        #10;
+        // JAL x14, 32
+        verify_decode(
+            .expected_pc(9'h1C), .instr_name("JAL"),
+            .exp_rs1(5'd0), .exp_rs2(5'd0), .exp_rd(5'd14), .exp_imm(32'd32), 
+            .exp_alusrc(1), .exp_branch(1), .exp_aluop(2'b00), .exp_futype(2'b01), // Branch
+            .exp_memread(0), .exp_memwrite(0), .exp_regwrite(1)
+        );
 
-        assert(immediate == 32'hFFFFFFF6) else $error("Negative immediate incorrect, got %h", immediate);
+        // JALR x15, 8(x16)
+        verify_decode(
+            .expected_pc(9'h20), .instr_name("JALR"),
+            .exp_rs1(5'd16), .exp_rs2(5'd0), .exp_rd(5'd15), .exp_imm(32'd8), 
+            .exp_alusrc(1), .exp_branch(1), .exp_aluop(2'b00), .exp_futype(2'b01), // Branch
+            .exp_memread(0), .exp_memwrite(0), .exp_regwrite(1)
+        );
 
-        // --- End Simulation ---
-        $display("=== All Tests Completed Successfully ===");
-        #10;
+        $display("\n=== All Tests Passed Successfully ===");
+        $finish;
+    end
+
+    // Safety timeout
+    initial begin
+        #5000;
+        $display("Error: Simulation Timeout.");
         $finish;
     end
 
