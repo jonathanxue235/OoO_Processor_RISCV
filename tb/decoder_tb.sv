@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-module OoO_top_tb;
+module decoder_tb;
 
     // =========================================================================
     // Parameters & Signals
