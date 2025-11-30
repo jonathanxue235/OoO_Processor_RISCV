@@ -171,6 +171,7 @@ module OoO_top #(
     .decode_rs2(skid_to_rename_rs2),                                // in
     .decode_rd(skid_to_rename_rd),                                  // in
     .decode_is_branch(skid_to_rename_FUtype == 2'b01),              // in
+    .decode_reg_write(skid_to_rename_Regwrite),                     // in
     .dispatch_valid(rename_to_skid_valid),                          // out
     .dispatch_prs1(rename_to_skid_prs1),                            // out - Phys Source 1
     .dispatch_prs2(rename_to_skid_prs2),                            // out - Phys Source 2

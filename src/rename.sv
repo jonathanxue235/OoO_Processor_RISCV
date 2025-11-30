@@ -16,6 +16,7 @@ module rename #(
     input logic [AREG_WIDTH-1:0] decode_rs2,
     input logic [AREG_WIDTH-1:0] decode_rd,
     input logic decode_is_branch,
+    input logic decode_reg_write,
     // (Pass-through signals like immediate, opcode, etc. would go here)
     
     // ------------------------------------
@@ -48,15 +49,19 @@ module rename #(
     logic [PREG_WIDTH-1:0] new_preg;
     logic reg_write_en;
     
+    
     // We write to a register if the instruction is valid and rd != 0
     assign reg_write_en = decode_valid && (decode_rd != 0);
+
+    logic actual_reg_write;
+    assign actual_reg_write = decode_valid && decode_reg_write && (decode_rd != 0); 
 
     // ------------------------------------
     // Stall Logic
     // ------------------------------------
     // We are ready if the free list has registers available.
     // If not, we must stall the decode stage.
-    assign rename_ready = free_list_valid;
+    assign rename_ready = free_list_valid || !actual_reg_write;
     
     // Dispatch is valid if Decode is valid AND we aren't stalling
     assign dispatch_valid = decode_valid && free_list_valid && !branch_mispredict;
@@ -72,7 +77,7 @@ module rename #(
         .reset(reset),
         .alloc_req(dispatch_valid && reg_write_en),
         .alloc_preg(new_preg),
-        .alloc_valid(free_list_valid),
+        .alloc_valid(free_list_valid && actual_reg_write),
         .commit_en(commit_en),
         .commit_old_preg(commit_old_preg),
         .is_branch_dispatch(dispatch_valid && decode_is_branch),
@@ -88,7 +93,7 @@ module rename #(
         .rs1(decode_rs1),
         .rs2(decode_rs2),
         .rd(decode_rd),
-        .reg_write(dispatch_valid && reg_write_en),
+        .reg_write(dispatch_valid && actual_reg_write),
         .new_preg(new_preg),
         .is_branch_dispatch(dispatch_valid && decode_is_branch),
         .branch_mispredict(branch_mispredict),
