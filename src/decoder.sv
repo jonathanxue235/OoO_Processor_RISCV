@@ -38,11 +38,6 @@ module decoder#(
     assign funct3 = instruction[14:12];
     assign funct7 = instruction[31:25];
 
-    // Extract register fields
-    assign rs1 = instruction[19:15];
-    assign rs2 = instruction[24:20];
-    assign rd  = instruction[11:7];
-
     // Pass through control signals (purely combinational)
     assign o_ready = i_ready;
     assign o_valid = i_valid;
@@ -81,7 +76,7 @@ module decoder#(
         endcase
     end
 
-    // Generate control signals
+    // Generate control signals and extract registers safely
     always_comb begin
         // Default values
         ALUsrc = 1'b0;
@@ -91,6 +86,11 @@ module decoder#(
         Memread = 1'b0;
         Memwrite = 1'b0;
         Regwrite = 1'b0;
+        
+        // Default registers to 0 to avoid garbage from immediate fields
+        rs1 = 5'b0;
+        rs2 = 5'b0;
+        rd  = 5'b0;
 
         case (opcode)
             // R-type ALU operations
@@ -100,6 +100,10 @@ module decoder#(
                 ALUOp = 2'b10;      // R-type ALU operation
                 FUtype = 2'b00;     // ALU
                 Regwrite = 1'b1;    // Write to rd
+                
+                rs1 = instruction[19:15];
+                rs2 = instruction[24:20];
+                rd  = instruction[11:7];
             end
 
             // I-type ALU operations (immediate)
@@ -109,6 +113,9 @@ module decoder#(
                 ALUOp = 2'b10;      // I-type ALU operation
                 FUtype = 2'b00;     // ALU
                 Regwrite = 1'b1;    // Write to rd
+                
+                rs1 = instruction[19:15];
+                rd  = instruction[11:7];
             end
 
             // Load instructions
@@ -119,6 +126,9 @@ module decoder#(
                 FUtype = 2'b10;     // LSU
                 Memread = 1'b1;     // Read from memory
                 Regwrite = 1'b1;    // Write to rd
+                
+                rs1 = instruction[19:15];
+                rd  = instruction[11:7];
             end
 
             // Store instructions
@@ -129,6 +139,9 @@ module decoder#(
                 FUtype = 2'b10;     // LSU
                 Memwrite = 1'b1;    // Write to memory
                 Regwrite = 1'b0;    // No register write
+                
+                rs1 = instruction[19:15];
+                rs2 = instruction[24:20];
             end
 
             // Branch instructions
@@ -138,6 +151,9 @@ module decoder#(
                 ALUOp = 2'b01;      // Branch comparison
                 FUtype = 2'b01;     // Branch unit
                 Regwrite = 1'b0;    // No register write
+                
+                rs1 = instruction[19:15];
+                rs2 = instruction[24:20];
             end
 
             // LUI (Load Upper Immediate)
@@ -147,6 +163,8 @@ module decoder#(
                 ALUOp = 2'b11;      // Pass immediate
                 FUtype = 2'b00;     // ALU
                 Regwrite = 1'b1;    // Write to rd
+                
+                rd = instruction[11:7];
             end
 
             // AUIPC (Add Upper Immediate to PC)
@@ -156,6 +174,8 @@ module decoder#(
                 ALUOp = 2'b00;      // Add (PC + immediate)
                 FUtype = 2'b00;     // ALU
                 Regwrite = 1'b1;    // Write to rd
+                
+                rd = instruction[11:7];
             end
 
             // JAL (Jump and Link)
@@ -165,6 +185,8 @@ module decoder#(
                 ALUOp = 2'b00;      // Add for PC calculation
                 FUtype = 2'b01;     // Branch unit
                 Regwrite = 1'b1;    // Write return address to rd
+                
+                rd = instruction[11:7];
             end
 
             // JALR (Jump and Link Register)
@@ -174,10 +196,13 @@ module decoder#(
                 ALUOp = 2'b00;      // Add for target calculation
                 FUtype = 2'b01;     // Branch unit
                 Regwrite = 1'b1;    // Write return address to rd
+                
+                rs1 = instruction[19:15];
+                rd  = instruction[11:7];
             end
 
             default: begin
-                // Keep default values for unknown instructions
+                // Keep default values
             end
         endcase
     end
