@@ -40,7 +40,33 @@ module OoO_top #(
   logic decode_to_skid_Memwrite;
   logic decode_to_skid_Regwrite;
 
+  // SKID BUFFER BETWEEN DECODE AND RENAME
+  logic skid_to_rename_ready;
+  logic skid_to_rename_valid;
+  logic [8:0] skid_to_rename_pc;
+  logic [4:0] skid_to_rename_rs1;
+  logic [4:0] skid_to_rename_rs2;
+  logic [4:0] skid_to_rename_rd;
+  logic skid_to_rename_ALUsrc;
+  logic skid_to_rename_Branch;
+  T skid_to_rename_immediate;
+  logic [1:0] skid_to_rename_ALUOp;
+  logic [1:0] skid_to_rename_FUtype;
+  logic skid_to_rename_Memread;
+  logic skid_to_rename_Memwrite;
+  logic skid_to_rename_Regwrite;
+
   // RENAME STAGE
+  logic rename_to_skid_ready;
+  logic rename_to_skid_valid;
+  logic [6:0] rename_to_skid_prs1; // Phys Source 1
+  logic [6:0] rename_to_skid_prs2; // Phys Source 2
+  logic [6:0] rename_to_skid_prd;  // Phys Dest (New)
+  logic [6:0] rename_to_skid_old_prd; // Old Phys Dest (For ROB)
+  logic [3:0] rename_to_skid_rob_tag;
+
+
+
   // logic dispatch_valid;
   // logic [6:0] dispatch_prs1; // Phys Source 1
   // logic [6:0] dispatch_prs2; // Phys Source 2
@@ -101,7 +127,6 @@ module OoO_top #(
     .o_ready(decode_to_skid_ready),                                 // out
     .o_pc(decode_to_skid_pc),                                       // out
     .o_valid(decode_to_skid_valid),                                 // out
-    // Additional outputs can be connected as needed
     .rs1(decode_to_skid_rs1),                                       // out
     .rs2(decode_to_skid_rs2),                                       // out
     .rd(decode_to_skid_rd),                                         // out
@@ -115,19 +140,49 @@ module OoO_top #(
     .Regwrite(decode_to_skid_Regwrite)                              // out
   );
 
+  pipe_skid_buffer #(
+    .DWIDTH(65) // Adjusted width for decode to rename signals
+  ) skid_buffer_decode_rename (
+    .clk(clk),                                                      // in
+    .reset(rst),                                                    // in
+    .i_data({decode_to_skid_pc, decode_to_skid_rs1, 
+             decode_to_skid_rs2, decode_to_skid_rd,
+             decode_to_skid_ALUsrc, decode_to_skid_Branch, 
+             decode_to_skid_immediate, decode_to_skid_ALUOp, 
+             decode_to_skid_FUtype, decode_to_skid_Memread,
+             decode_to_skid_Memwrite, decode_to_skid_Regwrite}),    // in
+    .i_valid(decode_to_skid_valid),                                 // in
+    .o_ready(decode_to_skid_ready),                                 // out
+    .o_data({skid_to_rename_pc, skid_to_rename_rs1, 
+             skid_to_rename_rs2, skid_to_rename_rd,
+             skid_to_rename_ALUsrc, skid_to_rename_Branch, 
+             skid_to_rename_immediate, skid_to_rename_ALUOp, 
+             skid_to_rename_FUtype, skid_to_rename_Memread,
+             skid_to_rename_Memwrite, skid_to_rename_Regwrite}),    // out
+    .o_valid(skid_to_rename_valid),                                 // out
+    .i_ready(rename_to_skid_ready)                                  // in
+  );
+  
+  rename rename_inst (
+    .clk(clk),                                                      // in
+    .reset(rst),                                                    // in
+    .decode_valid(skid_to_rename_valid),                            // in
+    .decode_rs1(skid_to_rename_rs1),                                // in
+    .decode_rs2(skid_to_rename_rs2),                                // in
+    .decode_rd(skid_to_rename_rd),                                  // in
+    .decode_is_branch(skid_to_rename_FUtype == 2'b01),              // in
+    .dispatch_valid(rename_to_skid_valid),                          // out
+    .dispatch_prs1(rename_to_skid_prs1),                            // out - Phys Source 1
+    .dispatch_prs2(rename_to_skid_prs2),                            // out - Phys Source 2
+    .dispatch_prd(rename_to_skid_prd),                              // out - Phys Dest (New)
+    .dispatch_old_prd(rename_to_skid_old_prd),                      // out - Old Phys Dest (For ROB)
+    .dispatch_rob_tag(rename_to_skid_rob_tag),                      // out
+    .rename_ready(rename_to_skid_ready),                            // out
+    .commit_en(1'b0),                                               // in - No commit handling in this top module
+    .commit_old_preg(),                                             // in - No commit handling in this top module
+    .branch_mispredict(1'b0)                                        // in - No branch handling in this top module
+  );
 
-  // pipe_skid_buffer #(
-  //   .DWIDTH(41) 
-  // ) skid_buffer_decode_rename (
-  //   .clk(clk),                                                      // in
-  //   .reset(rst),                                                    // in
-  //   .i_data({fetch_to_skid_instr, fetch_to_skid_pc}),               // in
-  //   .i_valid(fetch_to_skid_valid),                                  // in
-  //   .o_ready(skid_to_fetch_ready),                                  // out
-  //   .o_data({skid_to_decode_instr, skid_to_decode_pc}),             // out
-  //   .o_valid(skid_to_decode_valid),                                 // out
-  //   .i_ready(decode_to_skid_ready)                                  // in
-  // );
   
 
 
