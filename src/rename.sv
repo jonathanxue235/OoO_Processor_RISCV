@@ -17,6 +17,7 @@ module rename #(
     input logic [AREG_WIDTH-1:0] decode_rd,
     input logic decode_is_branch,
     input logic decode_reg_write,
+    
     input logic i_ready,
     // (Pass-through signals like immediate, opcode, etc. would go here)
     
@@ -48,20 +49,15 @@ module rename #(
     // Internal Signals
     logic free_list_valid;
     logic [PREG_WIDTH-1:0] new_preg;
-    logic reg_write_en;
     
-    
-    // We write to a register if the instruction is valid and rd != 0
-    assign reg_write_en = decode_valid && (decode_rd != 0);
-
+    // We write to a register if the instruction is valid, the decoder says so, AND it's not x0
     logic actual_reg_write;
-    assign actual_reg_write = decode_valid && decode_reg_write && (decode_rd != 0); 
+    assign actual_reg_write = decode_valid && decode_reg_write && (decode_rd != 0);
 
     // ------------------------------------
     // Stall Logic
     // ------------------------------------
-    // We are ready if the free list has registers available.
-    // If not, we must stall the decode stage.
+    // We are ready if the free list has registers available OR if we don't need one.
     assign rename_ready = (free_list_valid || !actual_reg_write) && i_ready;
     
     // Dispatch is valid if Decode is valid AND we aren't stalling
@@ -76,6 +72,7 @@ module rename #(
     ) u_free_list (
         .clk(clk),
         .reset(reset),
+        // Only request a new register if we are actually writing
         .alloc_req(dispatch_valid && actual_reg_write),
         .alloc_preg(new_preg),
         .alloc_valid(free_list_valid),
@@ -114,7 +111,11 @@ module rename #(
         .branch_mispredict(branch_mispredict)
     );
 
-    // Pass through new allocation to dispatch
-    assign dispatch_prd = new_preg;
+    // ------------------------------------
+    // Output Assignment
+    // ------------------------------------
+    // FIX: If we aren't actually writing to a register (e.g., Branch, Store, or rd=x0),
+    //      force the destination physical register to 0.
+    assign dispatch_prd = actual_reg_write ? new_preg : '0;
 
 endmodule
