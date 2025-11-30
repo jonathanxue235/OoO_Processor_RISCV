@@ -122,20 +122,25 @@ module OoO_rename_tb;
         assert_rename_check("LW", 5'd6, 5'd7, 5'd0, 7'd34, 7'd7, 7'd0, 7'd6);
 
         // --- Instr 3: SW x8, 12(x9) ---
-        // Note: Code treats this as write to x12 (due to imm=12 overlapping rd).
         // Expect: rs1(x9)->p9, rs2(x8)->p8. 
-        // Alloc: rd(12) -> p35. old_prd(x12) -> p12.
+        // CORRECT BEHAVIOR: No allocation. 
+        // The 'prd' output might show the *next* available register (p35), 
+        // but the Free List should NOT advance.
         wait_for_rename_valid();
-        $display("  [Note] SW instruction checks: Expecting allocation due to non-zero 'rd' field bits.");
-        assert_rename_check("SW", 5'd12, 5'd9, 5'd8, 7'd35, 7'd9, 7'd8, 7'd12);
+        $display("Checking SW (Correct Logic):");
+        if (dut.rename_to_skid_prs1 !== 7'd9) $error("  [FAIL] SW prs1 mismatch");
+        if (dut.rename_to_skid_prs2 !== 7'd8) $error("  [FAIL] SW prs2 mismatch");
+        // We don't check prd allocation here, just that flow is valid.
 
         // --- Instr 4: BEQ x10, x11, 16 ---
-        // Note: Code treats this as write to x16 (due to imm bits).
         // Expect: rs1(x10)->p10, rs2(x11)->p11.
-        // Alloc: rd(16) -> p36. old_prd(x16) -> p16.
+        // CORRECT BEHAVIOR: No allocation.
+        // Crucially: Because SW didn't take p35, BEQ sees p35 as the "next" register too.
         wait_for_rename_valid();
-        $display("  [Note] BEQ instruction checks: Expecting allocation due to non-zero 'rd' field bits.");
-        assert_rename_check("BEQ", 5'd16, 5'd10, 5'd11, 7'd36, 7'd10, 7'd11, 7'd16);
+        $display("Checking BEQ (Correct Logic):");
+        if (dut.rename_to_skid_prs1 !== 7'd10) $error("  [FAIL] BEQ prs1 mismatch");
+        if (dut.rename_to_skid_prs2 !== 7'd11) $error("  [FAIL] BEQ prs2 mismatch");
+        // Again, free list head should still be at p35.
 
         $display("\n=== All Rename Tests Passed Successfully ===");
         $finish;

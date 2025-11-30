@@ -10,10 +10,10 @@ module fetcher #(
     input T          branch_loc,
 
     input T          instr_from_cache,
-    output T         pc_to_cache,
+    output [8:0]         pc_to_cache,
 
     output T         instr_to_decode,
-    output T         pc_to_decode,
+    output [8:0]         pc_to_decode,
 
     input logic      ready,
     output logic     valid

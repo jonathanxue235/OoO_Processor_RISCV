@@ -41,7 +41,7 @@ module OoO_top #(
   logic decode_to_skid_Regwrite;
 
   // SKID BUFFER BETWEEN DECODE AND RENAME
-  logic skid_to_rename_ready;
+  logic skid_to_decode_ready;
   logic skid_to_rename_valid;
   logic [8:0] skid_to_rename_pc;
   logic [4:0] skid_to_rename_rs1;
