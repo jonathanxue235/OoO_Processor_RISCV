@@ -59,6 +59,7 @@ module OoO_top #(
   // RENAME STAGE
   logic rename_to_skid_ready;
   logic rename_to_skid_valid;
+  logic [8:0] rename_to_skid_pc;
   logic [6:0] rename_to_skid_prs1; // Phys Source 1
   logic [6:0] rename_to_skid_prs2; // Phys Source 2
   logic [6:0] rename_to_skid_prd;  // Phys Dest (New)
@@ -66,15 +67,26 @@ module OoO_top #(
   logic [3:0] rename_to_skid_rob_tag;
 
 
+  // SKID BUFFER BETWEEN RENAME AND DISPATCH
+  logic skid_to_rename_ready;
+  logic skid_to_dispatch_valid;
+  logic [8:0] skid_to_dispatch_pc;
+  logic [6:0] skid_to_dispatch_prs1; // Phys Source 1
+  logic [6:0] skid_to_dispatch_prs2; // Phys Source 2
+  logic [6:0] skid_to_dispatch_prd;  // Phys Dest (New)
+  logic [6:0] skid_to_dispatch_old_prd; // Old Phys Dest (For ROB)
+  logic [3:0] skid_to_dispatch_rob_tag;
 
-  // logic dispatch_valid;
-  // logic [6:0] dispatch_prs1; // Phys Source 1
-  // logic [6:0] dispatch_prs2; // Phys Source 2
-  // logic [6:0] dispatch_prd;  // Phys Dest (New)
-  // logic [6:0] dispatch_old_prd; // Old Phys Dest (For ROB)
-  // logic [3:0] dispatch_rob_tag;
-  // logic rename_ready;
 
+  // DISPATCH STAGE
+  logic dispatch_to_skid_ready;
+  logic dispatch_to_skid_valid;
+  logic [8:0] dispatch_to_skid_pc;
+  logic [6:0] dispatch_to_skid_prs1; // Phys Source 1
+  logic [6:0] dispatch_to_skid_prs2; // Phys Source 2
+  logic [6:0] dispatch_to_skid_prd;  // Phys Dest (New)
+  logic [6:0] dispatch_to_skid_old_prd; // Old Phys Dest (For ROB)
+  logic [3:0] dispatch_to_skid_rob_tag;
 
 
   // =================================================================================
@@ -172,6 +184,7 @@ module OoO_top #(
     .decode_rd(skid_to_rename_rd),                                  // in
     .decode_is_branch(skid_to_rename_FUtype == 2'b01),              // in
     .decode_reg_write(skid_to_rename_Regwrite),                     // in
+    .i_ready(skid_to_rename_ready),                                 // in
     .dispatch_valid(rename_to_skid_valid),                          // out
     .dispatch_prs1(rename_to_skid_prs1),                            // out - Phys Source 1
     .dispatch_prs2(rename_to_skid_prs2),                            // out - Phys Source 2
@@ -183,9 +196,27 @@ module OoO_top #(
     .commit_old_preg(),                                             // in - No commit handling in this top module
     .branch_mispredict(1'b0)                                        // in - No branch handling in this top module
   );
+  assign rename_to_skid_pc = skid_to_rename_pc; // Pass through PC
 
+
+  pipe_skid_buffer #(
+    .DWIDTH(41) // Adjusted width for decode to rename signals
+  ) skid_buffer_rename_dispatch (
+    .clk(clk),                                                      // in
+    .reset(rst),                                                    // in
+    .i_data({rename_to_skid_pc, rename_to_skid_prs1, 
+             rename_to_skid_prs2, rename_to_skid_prd,
+             rename_to_skid_old_prd, rename_to_skid_rob_tag}),      // in
+    .i_valid(rename_to_skid_valid),                                 // in
+    .o_ready(skid_to_rename_ready),                                 // out
+    .o_data({skid_to_dispatch_pc, skid_to_dispatch_prs1, 
+             skid_to_dispatch_prs2, skid_to_dispatch_prd,
+             skid_to_dispatch_old_prd, skid_to_dispatch_rob_tag}),  // out
+    .o_valid(skid_to_dispatch_valid),                                 // out
+    .i_ready(dispatch_to_skid_ready)                                  // in
+  );
   
-
+  assign dispatch_to_skid_ready = 1'b1; // Always ready in this top module
 
 
 endmodule

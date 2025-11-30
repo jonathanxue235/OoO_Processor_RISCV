@@ -17,6 +17,7 @@ module rename #(
     input logic [AREG_WIDTH-1:0] decode_rd,
     input logic decode_is_branch,
     input logic decode_reg_write,
+    input logic i_ready,
     // (Pass-through signals like immediate, opcode, etc. would go here)
     
     // ------------------------------------
@@ -61,7 +62,7 @@ module rename #(
     // ------------------------------------
     // We are ready if the free list has registers available.
     // If not, we must stall the decode stage.
-    assign rename_ready = free_list_valid || !actual_reg_write;
+    assign rename_ready = (free_list_valid || !actual_reg_write) && i_ready;
     
     // Dispatch is valid if Decode is valid AND we aren't stalling
     assign dispatch_valid = decode_valid && free_list_valid && !branch_mispredict;
