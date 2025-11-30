@@ -75,9 +75,9 @@ module rename #(
     ) u_free_list (
         .clk(clk),
         .reset(reset),
-        .alloc_req(dispatch_valid && reg_write_en),
+        .alloc_req(dispatch_valid && actual_reg_write),
         .alloc_preg(new_preg),
-        .alloc_valid(free_list_valid && actual_reg_write),
+        .alloc_valid(free_list_valid),
         .commit_en(commit_en),
         .commit_old_preg(commit_old_preg),
         .is_branch_dispatch(dispatch_valid && decode_is_branch),
