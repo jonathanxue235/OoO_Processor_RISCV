@@ -152,7 +152,7 @@ module OoO_top #(
              decode_to_skid_FUtype, decode_to_skid_Memread,
              decode_to_skid_Memwrite, decode_to_skid_Regwrite}),    // in
     .i_valid(decode_to_skid_valid),                                 // in
-    .o_ready(decode_to_skid_ready),                                 // out
+    .o_ready(skid_to_decode_ready),                                 // out
     .o_data({skid_to_rename_pc, skid_to_rename_rs1, 
              skid_to_rename_rs2, skid_to_rename_rd,
              skid_to_rename_ALUsrc, skid_to_rename_Branch, 
