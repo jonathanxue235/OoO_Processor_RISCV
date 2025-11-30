@@ -103,8 +103,8 @@ module decoder_tb;
     // Main Test Procedure
     // =========================================================================
     initial begin
-        $dumpfile("OoO_top_tb.vcd");
-        $dumpvars(0, OoO_top_tb);
+        $dumpfile("decoder_tb.vcd");
+        $dumpvars(0, decoder_tb);
         
         $display("=== Starting OoO_top Testbench (Up to Decode) ===");
 
