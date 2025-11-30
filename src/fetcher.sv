@@ -1,33 +1,31 @@
-`timescale 1ns / 1ps
-
 module fetcher #(
     parameter type T = logic [31:0]
 ) (
     input logic      clk,
     input logic      reset,
-
     input logic      take_branch,
     input T          branch_loc,
-
     input T          instr_from_cache,
     output T         pc_to_cache,
-
     output T         instr_to_decode,
     output T         pc_to_decode,
-
     input logic      ready,
     output logic     valid
 );
 
     // Internal registers
-    T pc_reg;                // Current Program counter (sent to ICache)
+    T pc_reg;                
     
-    // PC Pipeline to match BRAM latency (2 cycles for BRAM + 1 cycle for fetch register = 3 cycles total depth)
-    T pc_pipe_1;             
+    // PC Pipeline
+    T pc_pipe_1;
     T pc_pipe_2;
     
-    T fetched_instr_reg;     // Output register for instruction
-    T fetched_pc_reg;        // Output register for PC
+    // Valid Pipeline (MATCHES PC_PIPE DEPTH)
+    logic valid_pipe_1;
+    logic valid_pipe_2;
+
+    T fetched_instr_reg;     
+    T fetched_pc_reg;
     logic valid_reg;
 
     // Fetch logic
@@ -38,37 +36,44 @@ module fetcher #(
             pc_pipe_2 <= 32'h0;
             fetched_instr_reg <= 32'h0;
             fetched_pc_reg <= 32'h0;
+            
+            // RESET PIPELINES
+            valid_pipe_1 <= 1'b0;
+            valid_pipe_2 <= 1'b0;
             valid_reg <= 1'b0;
         end
         else begin
             // Handle branch redirection
             if (take_branch) begin
                 pc_reg <= branch_loc;
-                // Flush the pipeline on a branch (invalidate downstream)
-                valid_reg <= 1'b0; 
-                // Optional: You might want to flush pipe registers to 0 or branch_loc for cleanliness, 
-                // but valid_reg=0 handles the logic correctness.
+                
+                // FLUSH THE VALID PIPELINE
+                // This ensures "garbage" or old instructions currently in the BRAM 
+                // pipeline are marked invalid when they finally emerge.
+                valid_pipe_1 <= 1'b0;
+                valid_pipe_2 <= 1'b0;
+                valid_reg    <= 1'b0; 
             end
             // Normal fetch operation when downstream is ready
             else if (ready || !valid_reg) begin
-                // 1. Send Address to Cache (pc_reg is connected to pc_to_cache)
-                
-                // 2. Shift PC down the pipeline to wait for Data arrival
+                // 1. Shift PC down the pipeline
                 pc_pipe_1 <= pc_reg;
                 pc_pipe_2 <= pc_pipe_1;
                 
-                // 3. Capture Data and aligned PC
-                // If BRAM latency is 2 cycles, Data matching pc_pipe_2 arrives now.
+                // 2. Shift VALID signal down the pipeline
+                // We are issuing a new request, so we push '1' into the start of the pipe.
+                valid_pipe_1 <= 1'b1;
+                valid_pipe_2 <= valid_pipe_1;
+                
+                // 3. Capture Data and Valid Signal
                 fetched_instr_reg <= instr_from_cache;
                 fetched_pc_reg <= pc_pipe_2; 
+                valid_reg      <= valid_pipe_2; // Only becomes 1 when the pipe fills
 
                 // 4. Move to next PC
                 pc_reg <= pc_reg + 32'd4;
-                
-                valid_reg <= 1'b1;
             end
-            // If downstream is not ready, we stall. 
-            // All registers (pc_reg, pipes, fetched_*) hold their values automatically.
+            // If downstream is not ready, we stall (hold all register values)
         end
     end
 
