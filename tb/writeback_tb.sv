@@ -22,7 +22,6 @@ module writeback_tb;
     // =========================================================================
     // Helper Functions (Instruction Builders)
     // =========================================================================
-    // Standard RISC-V Instruction Encoding Helpers
     function automatic T create_r_type(input logic [6:0] opcode, input logic [4:0] rd, input logic [2:0] funct3, input logic [4:0] rs1, input logic [4:0] rs2, input logic [6:0] funct7);
         return {funct7, rs2, rs1, funct3, rd, opcode};
     endfunction
@@ -44,6 +43,69 @@ module writeback_tb;
     endfunction
 
     // =========================================================================
+    // Debug Helpers
+    // =========================================================================
+    function string get_alu_op_name(input logic [3:0] op);
+        case(op)
+            4'b0000: return "ADD";
+            4'b0001: return "SUB";
+            4'b0010: return "SLL";
+            4'b0011: return "SLT";
+            4'b0100: return "XOR";
+            4'b0101: return "SRL";
+            4'b0110: return "OR";
+            4'b0111: return "AND";
+            4'b1000: return "LUI";
+            4'b1001: return "AUIPC";
+            default: return "UNK";
+        endcase
+    endfunction
+
+    // =========================================================================
+    // Execution Monitor (Logs Opcode, Operands, etc. at Execution Time)
+    // =========================================================================
+    always @(negedge clk) begin
+        // ALU Monitor
+        if (dut.alu_issue_valid) begin
+            $display("[EXEC] Time=%0t | ALU    | PC=%h | Op=%s | RS1=%d RS2=%d Imm=%d | -> PRD=P%0d (ROB#%0d)",
+                $time,
+                dut.alu_issue_pc, 
+                get_alu_op_name(dut.alu_issue_op),
+                dut.alu_op_a, 
+                dut.alu_op_b, 
+                dut.alu_issue_imm,
+                dut.alu_issue_prd, 
+                dut.alu_issue_rob_tag
+            );
+        end
+
+        // Branch Monitor
+        if (dut.branch_issue_valid) begin
+            $display("[EXEC] Time=%0t | BRANCH | PC=%h | Fn3=%b | RS1=%d RS2=%d Imm=%d | -> ROB#%0d",
+                $time,
+                dut.branch_issue_pc,
+                dut.branch_issue_op[2:0],
+                dut.br_op_a,
+                dut.br_op_b,
+                dut.branch_issue_imm,
+                dut.branch_issue_rob_tag
+            );
+        end
+
+        // LSU Monitor
+        if (dut.lsu_issue_valid) begin
+            $display("[EXEC] Time=%0t | LSU    | PC=%h | AddrGen | Base=%d Offset=%d | -> PRD=P%0d (ROB#%0d)",
+                $time,
+                dut.lsu_issue_pc,
+                dut.lsu_op_a,
+                dut.lsu_issue_imm,
+                dut.lsu_issue_prd,
+                dut.lsu_issue_rob_tag
+            );
+        end
+    end
+
+    // =========================================================================
     // Verification Tasks
     // =========================================================================
 
@@ -63,8 +125,9 @@ module writeback_tb;
                 $error("[%s] Tag %d: ALU Data mismatch. Exp %d, Got %d", instr_name, exp_tag, exp_data, dut.alu_wb_data);
             if (dut.alu_wb_dest !== exp_prd)  
                 $error("[%s] Tag %d: ALU PRD mismatch. Exp P%0d, Got P%0d", instr_name, exp_tag, exp_prd, dut.alu_wb_dest);
-
-            $display("[PASS] %s (Tag %d) ALU Writeback: P%0d = %d", instr_name, exp_tag, dut.alu_wb_dest, dut.alu_wb_data);
+            
+            // Added PC to success message
+            $display("[PASS] %s (PC=%h) ALU WB: Result=%d -> P%0d", instr_name, dut.alu_issue_pc, dut.alu_wb_data, dut.alu_wb_dest);
             
             // Wait for clock to avoid double sampling
             @(posedge clk);
@@ -87,8 +150,8 @@ module writeback_tb;
                 $error("[%s] Tag %d: LSU Data mismatch. Exp %d, Got %d", instr_name, exp_tag, exp_data, dut.lsu_wb_data);
             if (dut.lsu_wb_dest !== exp_prd)  
                 $error("[%s] Tag %d: LSU PRD mismatch. Exp P%0d, Got P%0d", instr_name, exp_tag, exp_prd, dut.lsu_wb_dest);
-
-            $display("[PASS] %s (Tag %d) LSU Writeback: P%0d = %d", instr_name, exp_tag, dut.lsu_wb_dest, dut.lsu_wb_data);
+                
+            $display("[PASS] %s (Tag %d) LSU WB: Data=%d -> P%0d", instr_name, exp_tag, dut.lsu_wb_data, dut.lsu_wb_dest);
             @(posedge clk);
         end
     endtask
@@ -103,13 +166,12 @@ module writeback_tb;
         begin
             wait(dut.branch_wb_valid === 1'b1 && dut.branch_cdb_tag === exp_tag);
             #1;
-
             if (dut.branch_taken !== exp_taken)
                 $error("[%s] Tag %d: Branch Taken mismatch. Exp %b, Got %b", instr_name, exp_tag, exp_taken, dut.branch_taken);
             if (dut.branch_target_addr !== exp_target)
                 $error("[%s] Tag %d: Branch Target mismatch. Exp %h, Got %h", instr_name, exp_tag, exp_target, dut.branch_target_addr);
-
-            $display("[PASS] %s (Tag %d) Branch Writeback: Taken=%b, Target=%h", instr_name, exp_tag, dut.branch_taken, dut.branch_target_addr);
+                
+            $display("[PASS] %s (PC=%h) Branch WB: Taken=%b, Target=%h", instr_name, dut.branch_issue_pc, dut.branch_taken, dut.branch_target_addr);
             @(posedge clk);
         end
     endtask
@@ -139,6 +201,7 @@ module writeback_tb;
         // 1. ADDI x1, x0, 10   (Tag 0, x1 -> P32)  => ALU
         // 2. ADDI x2, x0, 20   (Tag 1, x2 -> P33)  => ALU
         // 3. ADD  x3, x1, x2   (Tag 2, x3 -> P34)  => ALU (Dependency check)
+        
         // 4. SW   x3, 4(x0)    (Tag 3, x3 -> Mem)  => LSU (Store)
         // 5. LW   x4, 4(x0)    (Tag 4, x4 -> P35)  => LSU (Load from Mem)
         // 6. BEQ  x1, x1, 8    (Tag 5, Taken)      => Branch
@@ -146,23 +209,18 @@ module writeback_tb;
         // PC 0: ADDI x1, x0, 10
         dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[0] = 
             create_i_type(7'b0010011, 5'd1, 3'b000, 5'd0, 12'd10);
-
         // PC 4: ADDI x2, x0, 20
         dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[1] = 
             create_i_type(7'b0010011, 5'd2, 3'b000, 5'd0, 12'd20);
-
         // PC 8: ADD x3, x1, x2
         dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[2] = 
             create_r_type(7'b0110011, 5'd3, 3'b000, 5'd1, 5'd2, 7'b0000000);
-
         // PC 12: SW x3, 4(x0) (Store 30 to Addr 4)
         dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[3] = 
             create_s_type(7'b0100011, 3'b010, 5'd0, 5'd3, 12'd4);
-
         // PC 16: LW x4, 4(x0) (Load from Addr 4, Expect 30)
         dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[4] = 
             create_i_type(7'b0000011, 5'd4, 3'b010, 5'd0, 12'd4);
-
         // PC 20: BEQ x1, x1, 8 (Taken, Target = 20 + 8 = 28 / 0x1C)
         dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[5] = 
             create_b_type(7'b1100011, 3'b000, 5'd1, 5'd1, 13'd8);
@@ -180,10 +238,8 @@ module writeback_tb;
             begin
                 // 1. ADDI x1, x0, 10
                 verify_alu_wb(.exp_tag(4'd0), .exp_data(32'd10), .exp_prd(7'd32), .instr_name("ADDI x1"));
-                
                 // 2. ADDI x2, x0, 20
                 verify_alu_wb(.exp_tag(4'd1), .exp_data(32'd20), .exp_prd(7'd33), .instr_name("ADDI x2"));
-
                 // 3. ADD x3, x1, x2 (Expect 10+20=30)
                 verify_alu_wb(.exp_tag(4'd2), .exp_data(32'd30), .exp_prd(7'd34), .instr_name("ADD x3"));
             end
@@ -193,10 +249,8 @@ module writeback_tb;
                 // 4. SW x3, 4(x0) (Tag 3)
                 // Stores typically don't write back data to register, so exp_prd=0, exp_data=0
                 verify_lsu_wb(.exp_tag(4'd3), .exp_data(32'd0), .exp_prd(7'd0), .instr_name("SW"));
-
                 // 5. LW x4, 4(x0) (Tag 4)
-                // Must wait for SW to complete. Assuming LSU handles forwarding or serializes, 
-                // x4 should be 30.
+                // Must wait for SW to complete. Assuming LSU handles forwarding or serializes, x4 should be 30.
                 verify_lsu_wb(.exp_tag(4'd4), .exp_data(32'd30), .exp_prd(7'd35), .instr_name("LW x4"));
             end
 
