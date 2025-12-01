@@ -6,16 +6,12 @@ module OoO_top #(
     input logic clk,
     input logic rst
 );
-  // ... [Keep sources 2-79 SAME as original until RS instantiation] ...
-  // [Lines 1-212 approx remain identical. I will focus on the modified instantiations]
 
   // ============================================================================
   // SIGNAL DECLARATIONS - FETCH PIPELINE
   // ============================================================================
-
-  // Instruction memory interface
   T cache_to_fetch_instr;
-
+  
   // Fetch stage
   logic [8:0] fetch_to_cache_pc;
   logic fetch_to_skid_valid;
@@ -31,8 +27,6 @@ module OoO_top #(
   // ============================================================================
   // SIGNAL DECLARATIONS - DECODE PIPELINE
   // ============================================================================
-
-  // Decode stage output
   logic decode_to_skid_ready;
   logic decode_to_skid_valid;
   logic [8:0] decode_to_skid_pc;
@@ -67,8 +61,6 @@ module OoO_top #(
   // ============================================================================
   // SIGNAL DECLARATIONS - RENAME & DISPATCH PIPELINE
   // ============================================================================
-
-  // Rename stage output
   logic rename_to_skid_ready;
   logic rename_to_skid_valid;
   logic [8:0] rename_to_skid_pc;
@@ -105,29 +97,22 @@ module OoO_top #(
   // ============================================================================
   // SIGNAL DECLARATIONS - EXECUTION CONTROL & STATUS
   // ============================================================================
-
-  // Physical register file read data
   logic [31:0] alu_op_a, alu_op_b;
   logic [31:0] br_op_a, br_op_b;
   logic [31:0] lsu_op_a, lsu_op_b;
   logic [127:0] phys_reg_busy;
 
-  // Dispatch stage control
   logic dispatch_to_skid_ready;
-
-  // Reservation station & ROB status
   logic rob_full;
   logic alu_rs_full;
   logic branch_rs_full;
   logic lsu_rs_full;
-
-  // Dispatch allocation signals
+  
   logic dispatch_alloc_rob;
   logic dispatch_alloc_alu;
   logic dispatch_alloc_branch;
   logic dispatch_alloc_lsu;
 
-  // Commit stage
   logic commit_valid;
   logic [6:0] commit_old_preg;
   logic [3:0] commit_tag;
@@ -135,8 +120,6 @@ module OoO_top #(
   // ============================================================================
   // SIGNAL DECLARATIONS - EXECUTION UNIT ISSUE & WRITEBACK
   // ============================================================================
-
-  // ALU unit signals
   logic alu_issue_valid;
   logic [6:0] alu_issue_prs1, alu_issue_prs2, alu_issue_prd;
   logic [3:0] alu_issue_rob_tag;
@@ -149,7 +132,6 @@ module OoO_top #(
   logic [6:0] alu_wb_dest;
   logic [3:0] alu_cdb_tag;
 
-  // Branch unit signals
   logic branch_issue_valid;
   logic [6:0] branch_issue_prs1, branch_issue_prs2, branch_issue_prd;
   logic [3:0] branch_issue_rob_tag;
@@ -162,7 +144,6 @@ module OoO_top #(
   logic [31:0] branch_target_addr;
   logic branch_mispredict;
 
-  // LSU unit signals
   logic lsu_issue_valid;
   logic [6:0] lsu_issue_prs1, lsu_issue_prs2, lsu_issue_prd;
   logic [3:0] lsu_issue_rob_tag;
@@ -183,19 +164,14 @@ module OoO_top #(
   // ============================================================================
   // PHYSICAL REGISTER BUSY TRACKING
   // ============================================================================
-  // Tracks which physical registers are busy (in-flight).
-  // When a new instruction dispatches (allocates a physical register), mark it as busy.
-  // When an instruction completes on CDB, mark it as ready.
   always_ff @(posedge clk) begin
       if (rst) begin
           phys_reg_busy <= '1;
       end else begin
-          // Mark register as busy when instruction is dispatched
           if (skid_to_dispatch_valid && dispatch_to_skid_ready) begin
               if (skid_to_dispatch_prd != 0)
                   phys_reg_busy[skid_to_dispatch_prd] <= 1'b0;
           end
-          // Mark register as ready when instruction completes on CDB
           if (cdb_valid && cdb_prd != 0) begin
               phys_reg_busy[cdb_prd] <= 1'b1;
           end
@@ -206,18 +182,17 @@ module OoO_top #(
   // MODULE INSTANTIATIONS - FETCH STAGE
   // ============================================================================
 
-  // Instruction memory block
   blk_mem_gen_0 instruction_memory (
     .clka(clk),
     .addra({2'b00, fetch_to_cache_pc[8:2]}),
     .douta(cache_to_fetch_instr)
   );
 
-  // Fetch unit - retrieves instructions from cache
+  // [FIX] Connected branch_mispredict and branch_target_addr
   fetcher #(.T(T)) fetch_inst (
     .clk(clk), .reset(rst), 
-    .take_branch(1'b0), 
-    .branch_loc(32'b0),    
+    .take_branch(branch_mispredict), 
+    .branch_loc(branch_target_addr),    
     .instr_from_cache(cache_to_fetch_instr), 
     .pc_to_cache(fetch_to_cache_pc),    
     .instr_to_decode(fetch_to_skid_instr), 
@@ -226,7 +201,6 @@ module OoO_top #(
     .valid(fetch_to_skid_valid)
   );
 
-  // Skid buffer for fetch-decode pipeline staging
   pipe_skid_buffer #(.DWIDTH(41)) skid_buffer_fetch_decode (
     .clk(clk),
     .reset(rst),
@@ -242,14 +216,13 @@ module OoO_top #(
   // MODULE INSTANTIATIONS - DECODE STAGE
   // ============================================================================
 
-  // Decoder - extracts instruction fields and generates control signals
   decoder #(.T(T)) decode_inst (
     .instruction(skid_to_decode_instr), 
     .i_pc(skid_to_decode_pc),                       
     .i_valid(skid_to_decode_valid), 
     .i_ready(skid_to_decode_ready),            
     .o_ready(decode_to_skid_ready), 
-    .o_pc(decode_to_skid_pc),                       
+    .o_pc(decode_to_skid_pc),           
     .o_valid(decode_to_skid_valid), 
     .rs1(decode_to_skid_rs1),                      
     .rs2(decode_to_skid_rs2), 
@@ -264,7 +237,6 @@ module OoO_top #(
     .Regwrite(decode_to_skid_Regwrite)
   );
 
-  // Skid buffer for decode-rename pipeline staging
   pipe_skid_buffer #(.DWIDTH(67)) skid_buffer_decode_rename (
     .clk(clk),
     .reset(rst),
@@ -282,7 +254,7 @@ module OoO_top #(
   // MODULE INSTANTIATIONS - RENAME STAGE
   // ============================================================================
 
-  // Rename unit - performs register renaming to enable instruction-level parallelism
+  // [FIX] Connected branch_mispredict
   rename rename_inst (
     .clk(clk), 
     .reset(rst), 
@@ -303,17 +275,17 @@ module OoO_top #(
     .rename_ready(rename_to_skid_ready),            
     .commit_en(commit_valid), 
     .commit_old_preg(commit_old_preg), 
-    .branch_mispredict(1'b0) 
+    .branch_mispredict(branch_mispredict) // Updated
   );
+
   assign rename_to_skid_pc       = skid_to_rename_pc;
   assign rename_to_skid_futype   = skid_to_rename_FUtype;
   assign rename_to_skid_alu_op   = skid_to_rename_ALUOp;
   assign rename_to_skid_immediate= skid_to_rename_immediate;
   assign rename_to_skid_branch   = skid_to_rename_Branch;
-  assign rename_to_skid_alusrc = skid_to_rename_ALUsrc;
+  assign rename_to_skid_alusrc   = skid_to_rename_ALUsrc;
   assign rename_to_skid_memwrite = skid_to_rename_Memwrite;
 
-  // Skid buffer for rename-dispatch pipeline staging
   pipe_skid_buffer #(.DWIDTH(83)) skid_buffer_rename_dispatch (
     .clk(clk),
     .reset(rst),
@@ -335,7 +307,6 @@ module OoO_top #(
   // MODULE INSTANTIATIONS - DISPATCH & EXECUTION UNITS
   // ============================================================================
 
-  // Dispatch unit - allocates resources (ROB, RS) and routes to functional units
   dispatch dispatch_unit (
       .i_valid(skid_to_dispatch_valid), 
       .i_futype(skid_to_dispatch_futype),
@@ -353,15 +324,11 @@ module OoO_top #(
   // ============================================================================
   // COMMON DATA BUS (CDB) PRIORITY ARBITRATION
   // ============================================================================
-  // Priority: Branch > LSU > ALU
-  // Only one execution unit can broadcast on CDB per cycle.
-  // Branch operations have highest priority (no forwarding stalls),
-  // followed by LSU (memory ops), then ALU (compute ops).
   always_comb begin
       if (branch_wb_valid) begin
           cdb_valid = 1'b1;
           cdb_tag   = branch_cdb_tag;
-          cdb_prd   = 7'b0;  // Branch does not write to PRF
+          cdb_prd   = 7'b0;
       end else if (lsu_wb_valid) begin
           cdb_valid = 1'b1;
           cdb_tag   = lsu_cdb_tag;
@@ -377,8 +344,8 @@ module OoO_top #(
       end
   end
 
-  rob #(.ROB_WIDTH(4), 
-        .PREG_WIDTH(7)) rob_inst (
+  // [FIX] Connected branch_mispredict
+  rob #(.ROB_WIDTH(4), .PREG_WIDTH(7)) rob_inst (
       .clk(clk), 
       .reset(rst), 
       .i_valid(dispatch_alloc_rob), 
@@ -393,29 +360,24 @@ module OoO_top #(
       .o_commit_valid(commit_valid), 
       .o_commit_old_preg(commit_old_preg),
       .o_commit_tag(commit_tag), 
-      .branch_mispredict(1'b0)
+      .branch_mispredict(branch_mispredict) // Updated
   );
 
   // ============================================================================
-  // CDB CONTENTION BACKPRESSURE & STALL SIGNALS
+  // CDB CONTENTION BACKPRESSURE
   // ============================================================================
-  // Handle cases where multiple units try to write to CDB simultaneously.
-  // Stall lower-priority units when higher-priority units are broadcasting.
   logic lsu_stall;
   logic lsu_ready_to_rs;
   logic alu_rs_enable;
 
-  // Stall LSU if Branch is taking CDB (Branch has highest priority)
   assign lsu_stall = branch_wb_valid;
-
-  // ALU can only issue if neither Branch nor LSU are using CDB
   assign alu_rs_enable = !(branch_wb_valid || lsu_wb_valid);
 
   // ============================================================================
-  // RESERVATION STATIONS - ALU, BRANCH, LSU
+  // RESERVATION STATIONS
   // ============================================================================
 
-  // ALU Reservation Station - backs up due to CDB contention
+  // [FIX] Connected branch_mispredict
   reservation_station #(.PREG_WIDTH(7), .ROB_WIDTH(4), .RS_SIZE(8)) rs_alu_inst (
       .clk(clk), 
       .reset(rst),
@@ -434,9 +396,7 @@ module OoO_top #(
       .i_rs1_ready((skid_to_dispatch_prs1 == 0) || phys_reg_busy[skid_to_dispatch_prs1]),
       .i_rs2_ready((skid_to_dispatch_prs2 == 0) || phys_reg_busy[skid_to_dispatch_prs2]),
       .o_full(alu_rs_full),
-
-      .i_eu_ready(alu_rs_enable), // CHANGED: Connected to backpressure logic
-
+      .i_eu_ready(alu_rs_enable), 
       .o_issue_valid(alu_issue_valid), 
       .o_issue_prs1(alu_issue_prs1),
       .o_issue_prs2(alu_issue_prs2), 
@@ -447,10 +407,10 @@ module OoO_top #(
       .o_issue_pc(alu_issue_pc),
       .o_issue_alusrc(alu_issue_alusrc), 
       .o_issue_memwrite(), 
-      .branch_mispredict(1'b0)
+      .branch_mispredict(branch_mispredict) // Updated
   );
 
-  // Branch Reservation Station - highest priority, never stalled
+  // [FIX] Connected branch_mispredict
   reservation_station #(.PREG_WIDTH(7), .ROB_WIDTH(4), .RS_SIZE(8)) rs_branch_inst (
       .clk(clk), 
       .reset(rst),
@@ -469,7 +429,7 @@ module OoO_top #(
       .i_rs1_ready((skid_to_dispatch_prs1 == 0) || phys_reg_busy[skid_to_dispatch_prs1]),
       .i_rs2_ready((skid_to_dispatch_prs2 == 0) || phys_reg_busy[skid_to_dispatch_prs2]),
       .o_full(branch_rs_full),
-      .i_eu_ready(1'b1), // Branch has highest priority, always ready
+      .i_eu_ready(1'b1),
       .o_issue_valid(branch_issue_valid), 
       .o_issue_prs1(branch_issue_prs1),
       .o_issue_prs2(branch_issue_prs2), 
@@ -478,10 +438,11 @@ module OoO_top #(
       .o_issue_imm(branch_issue_imm),
       .o_issue_alu_op(branch_issue_op), 
       .o_issue_pc(branch_issue_pc),
-      .o_issue_memwrite(), .branch_mispredict(1'b0)
+      .o_issue_memwrite(), 
+      .branch_mispredict(branch_mispredict) // Updated
   );
 
-  // LSU Reservation Station - medium priority, stalled by Branch
+  // [FIX] Connected branch_mispredict
   reservation_station #(.PREG_WIDTH(7), .ROB_WIDTH(4), .RS_SIZE(8)) rs_lsu_inst (
       .clk(clk), 
       .reset(rst),
@@ -500,9 +461,7 @@ module OoO_top #(
       .i_rs1_ready((skid_to_dispatch_prs1 == 0) || phys_reg_busy[skid_to_dispatch_prs1]),
       .i_rs2_ready((skid_to_dispatch_prs2 == 0) || phys_reg_busy[skid_to_dispatch_prs2]),
       .o_full(lsu_rs_full),
-
-      .i_eu_ready(lsu_ready_to_rs), // CHANGED: Connected to LSU ready signal
-
+      .i_eu_ready(lsu_ready_to_rs), 
       .o_issue_valid(lsu_issue_valid), 
       .o_issue_prs1(lsu_issue_prs1),
       .o_issue_prs2(lsu_issue_prs2), 
@@ -512,14 +471,13 @@ module OoO_top #(
       .o_issue_alu_op(lsu_issue_op), 
       .o_issue_pc(lsu_issue_pc),
       .o_issue_memwrite(lsu_issue_memwrite), 
-      .branch_mispredict(1'b0)
+      .branch_mispredict(branch_mispredict) // Updated
   );
 
   // ============================================================================
   // PHYSICAL REGISTER FILE & EXECUTION UNITS
   // ============================================================================
 
-  // Physical register file - stores all physical register values
   physical_register_file #(.DATA_WIDTH(32), .PREG_WIDTH(7)) prf_inst (
       .clk(clk), 
       .reset(rst),
@@ -543,7 +501,6 @@ module OoO_top #(
       .lsu_wb_data(lsu_wb_data)
   );
 
-  // ALU (Arithmetic Logic Unit) - performs integer operations
   alu_unit #(.DATA_WIDTH(32), .ROB_WIDTH(4), .PREG_WIDTH(7)) alu_instance (
       .i_op1(alu_op_a), 
       .i_op2(alu_issue_alusrc ? alu_issue_imm : alu_op_b),
@@ -559,7 +516,6 @@ module OoO_top #(
       .o_valid(alu_wb_valid)
   );
 
-  // Branch Unit - evaluates branch conditions and predicts targets
   branch_unit #(.DATA_WIDTH(32), .ROB_WIDTH(4)) branch_instance (
       .i_op1(br_op_a), 
       .i_op2(br_op_b), 
@@ -575,7 +531,6 @@ module OoO_top #(
       .o_mispredict(branch_mispredict)
   );
 
-  // LSU (Load-Store Unit) - handles memory operations with stall/backpressure
   lsu_unit #(.DATA_WIDTH(32), .ROB_WIDTH(4), .PREG_WIDTH(7)) lsu_instance (
       .clk(clk), .reset(rst),
       .i_base_addr(lsu_op_a), 
@@ -585,10 +540,8 @@ module OoO_top #(
       .i_valid(lsu_issue_valid), 
       .i_prd(lsu_issue_prd), 
       .i_rob_tag(lsu_issue_rob_tag),
-      // Backpressure signals for CDB contention handling
       .i_stall(lsu_stall),
       .o_ready(lsu_ready_to_rs),
-      // Writeback to CDB
       .o_data(lsu_wb_data), 
       .o_prd(lsu_wb_dest), 
       .o_rob_tag(lsu_cdb_tag), 
