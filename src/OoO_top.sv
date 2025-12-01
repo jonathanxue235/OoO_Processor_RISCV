@@ -66,8 +66,7 @@ module OoO_top #(
   logic [6:0] rename_to_skid_prd;  // Phys Dest (New)
   logic [6:0] rename_to_skid_old_prd; // Old Phys Dest (For ROB)
   logic [3:0] rename_to_skid_rob_tag;
-  
-  // -- Control Signals Passed Through Rename (Bypass) --
+
   logic [1:0] rename_to_skid_futype;
   logic [1:0] rename_to_skid_alu_op;
   T           rename_to_skid_immediate;
@@ -87,6 +86,12 @@ module OoO_top #(
   logic [1:0] skid_to_dispatch_alu_op;
   T           skid_to_dispatch_immediate;
   logic       skid_to_dispatch_branch;
+
+
+  // PHYSICAL REGISTER FILE READ DATA 
+  logic [31:0] alu_op_a, alu_op_b;
+  logic [31:0] br_op_a,  br_op_b;
+  logic [31:0] lsu_op_a, lsu_op_b;
 
   // DISPATCH STAGE & ROB & RS WIRES
   logic dispatch_to_skid_ready;
@@ -436,6 +441,44 @@ module OoO_top #(
       .o_issue_valid(lsu_issue_valid),
       // ... connect other issue signals ...
       .branch_mispredict(1'b0)
+  );
+
+
+  physical_register_file #(
+      .DATA_WIDTH(32),
+      .PREG_WIDTH(7)
+  ) prf_inst (
+      .clk(clk),
+      .reset(rst),
+
+      // -- Read Ports (Connected to RS Issue signals) --
+      // ALU
+      .alu_prs1_addr(alu_issue_prs1), // From rs_alu_inst
+      .alu_prs2_addr(alu_issue_prs2), // From rs_alu_inst
+      .alu_prs1_data(alu_op_a),       // To ALU
+      .alu_prs2_data(alu_op_b),       // To ALU
+
+      // Branch (You need to define branch_issue_prs1 in your top vars first)
+      .br_prs1_addr(branch_issue_prs1), 
+      .br_prs2_addr(branch_issue_prs2),
+      .br_prs1_data(br_op_a),
+      .br_prs2_data(br_op_b),
+
+      // LSU (You need to define lsu_issue_prs1 in your top vars first)
+      .lsu_prs1_addr(lsu_issue_prs1),
+      .lsu_prs2_addr(lsu_issue_prs2),
+      .lsu_prs1_data(lsu_op_a),
+      .lsu_prs2_data(lsu_op_b),
+
+      // -- Write Ports (Placeholder for now, connected to CDB later) --
+      // These should eventually connect to the outputs of your ALU/LSU modules
+      .alu_wb_valid(1'b0), // Connect to alu_cdb_valid
+      .alu_wb_dest('0),    // Connect to alu_cdb_rob_tag (mapped to preg) or direct preg
+      .alu_wb_data('0),    
+      
+      .lsu_wb_valid(1'b0),
+      .lsu_wb_dest('0),
+      .lsu_wb_data('0)
   );
 
 endmodule
