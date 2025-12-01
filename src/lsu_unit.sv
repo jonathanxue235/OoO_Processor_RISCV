@@ -18,6 +18,8 @@ module lsu_unit #(
     input logic                  i_memwrite,
 
     input logic                  i_valid,
+    input logic                  i_stall, // NEW: Input from CDB Arbiter
+    output logic                 o_ready, // NEW: Backpressure to RS
     
     // Writeback Metadata
     input logic [PREG_WIDTH-1:0] i_prd,
@@ -47,6 +49,8 @@ module lsu_unit #(
     end
 
     // Synchronous Read / Write (Cycle 1 -> Cycle 2)
+    // Note: We allow memory access even if stalled (idempotent), 
+    // but we won't latch the result into the pipe if stalled.
     always_ff @(posedge clk) begin
         // Word aligned access
         if (i_valid) begin
@@ -63,7 +67,6 @@ module lsu_unit #(
     // ------------------------------------------
     // 3. Pipeline Logic (To match 2-cycle latency)
     // ------------------------------------------
-    // We need to carry the metadata (prd, rob_tag) along with the memory access
     
     // Pipeline Stage 1
     logic                  stg1_valid;
@@ -76,6 +79,9 @@ module lsu_unit #(
     logic [ROB_WIDTH-1:0]  stg2_rob_tag;
     logic [DATA_WIDTH-1:0] stg2_data;
 
+    // Ready if not stalled. If stalled, we freeze everything.
+    assign o_ready = !i_stall;
+
     always_ff @(posedge clk) begin
         if (reset) begin
             stg1_valid <= 0;
@@ -83,18 +89,19 @@ module lsu_unit #(
             stg1_prd <= '0; stg1_rob_tag <= '0;
             stg2_prd <= '0; stg2_rob_tag <= '0;
             stg2_data <= '0;
-        end else begin
+        end else if (!i_stall) begin
             // Stage 1 (Address Gen / RAM Request) -> Latch Metadata
             stg1_valid   <= i_valid;
             stg1_prd     <= i_prd;
             stg1_rob_tag <= i_rob_tag;
-
+            
             // Stage 2 (RAM Output Available) -> Latch Data & Metadata
             stg2_valid   <= stg1_valid;
             stg2_prd     <= stg1_prd;
             stg2_rob_tag <= stg1_rob_tag;
             stg2_data    <= ram_out; // Capture RAM output
         end
+        // If i_stall is 1, registers hold their values (freezing the pipeline)
     end
 
     // Output assignments
