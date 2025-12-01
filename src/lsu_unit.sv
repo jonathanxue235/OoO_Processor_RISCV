@@ -12,6 +12,11 @@ module lsu_unit #(
     // Inputs
     input logic [DATA_WIDTH-1:0] i_base_addr, // rs1
     input logic [DATA_WIDTH-1:0] i_offset,    // immediate
+    
+    // NEW: Store Data and Control
+    input logic [DATA_WIDTH-1:0] i_store_data, // rs2
+    input logic                  i_memwrite,
+
     input logic                  i_valid,
     
     // Writeback Metadata
@@ -24,7 +29,6 @@ module lsu_unit #(
     output logic [ROB_WIDTH-1:0]  o_rob_tag,
     output logic                  o_valid
 );
-
     // ------------------------------------------
     // 1. Address Generation
     // ------------------------------------------
@@ -42,11 +46,17 @@ module lsu_unit #(
         for(int i=0; i<MEM_DEPTH; i++) dmem[i] = i*4; // Dummy data
     end
 
-    // Synchronous Read (Cycle 1 -> Cycle 2)
+    // Synchronous Read / Write (Cycle 1 -> Cycle 2)
     always_ff @(posedge clk) begin
         // Word aligned access
         if (i_valid) begin
-            ram_out <= dmem[memory_addr[11:2]]; 
+            if (i_memwrite) begin
+                 // Store
+                 dmem[memory_addr[11:2]] <= i_store_data;
+            end else begin
+                 // Load
+                 ram_out <= dmem[memory_addr[11:2]];
+            end
         end
     end
 

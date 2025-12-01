@@ -13,11 +13,13 @@ module reservation_station #(
     input logic [31:0]           i_pc,
     input logic [PREG_WIDTH-1:0] i_prs1,
     input logic [PREG_WIDTH-1:0] i_prs2,
+    
     input logic [PREG_WIDTH-1:0] i_prd,
     input logic [ROB_WIDTH-1:0]  i_rob_tag,
     input logic [31:0]           i_imm,
     input logic [3:0]            i_alu_op,
-    input logic                  i_alusrc, // NEW: Input from Dispatch
+    input logic                  i_alusrc, // Input from Dispatch
+    input logic                  i_memwrite, // NEW: Input from Dispatch
 
     // Initial Readiness
     input logic i_rs1_ready,
@@ -39,7 +41,8 @@ module reservation_station #(
     output logic [31:0]           o_issue_imm,
     output logic [3:0]            o_issue_alu_op,
     output logic [31:0]           o_issue_pc,
-    output logic                  o_issue_alusrc, // NEW: Output to EU Mux
+    output logic                  o_issue_alusrc, // Output to EU Mux
+    output logic                  o_issue_memwrite, // NEW: Output to EU
 
     // Recovery
     input logic branch_mispredict
@@ -56,7 +59,8 @@ module reservation_station #(
         logic [31:0]           imm;
         logic [3:0]            alu_op;
         logic [31:0]           pc;
-        logic                  alusrc; // NEW: Store ALUsrc state
+        logic                  alusrc;
+        logic                  memwrite; // NEW: Store MemWrite bit
     } rs_entry_t;
 
     rs_entry_t rs_entries [0:RS_SIZE-1];
@@ -96,7 +100,7 @@ module reservation_station #(
     end
 
     assign o_issue_valid = found_ready;
-    
+
     always_comb begin
         if (found_ready) begin
             o_issue_prs1    = rs_entries[issue_idx].prs1;
@@ -106,11 +110,15 @@ module reservation_station #(
             o_issue_imm     = rs_entries[issue_idx].imm;
             o_issue_alu_op  = rs_entries[issue_idx].alu_op;
             o_issue_pc      = rs_entries[issue_idx].pc;
-            o_issue_alusrc  = rs_entries[issue_idx].alusrc; // NEW
+            o_issue_alusrc  = rs_entries[issue_idx].alusrc;
+            o_issue_memwrite = rs_entries[issue_idx].memwrite; // NEW
         end else begin
-            o_issue_prs1 = '0; o_issue_prs2 = '0; o_issue_prd = '0;
+            o_issue_prs1 = '0;
+            o_issue_prs2 = '0; o_issue_prd = '0;
             o_issue_rob_tag = '0; o_issue_imm = '0; o_issue_alu_op = '0; 
-            o_issue_pc = '0; o_issue_alusrc = '0;
+            o_issue_pc = '0;
+            o_issue_alusrc = '0;
+            o_issue_memwrite = '0; // NEW
         end
     end
 
@@ -121,6 +129,7 @@ module reservation_station #(
                 rs_entries[i].valid <= 0;
                 rs_entries[i].rs1_ready <= 0;
                 rs_entries[i].rs2_ready <= 0;
+                rs_entries[i].memwrite <= 0; // NEW
             end
         end
         else begin
@@ -134,10 +143,13 @@ module reservation_station #(
                 rs_entries[alloc_idx].imm       <= i_imm;
                 rs_entries[alloc_idx].alu_op    <= i_alu_op;
                 rs_entries[alloc_idx].pc        <= i_pc;
-                rs_entries[alloc_idx].alusrc    <= i_alusrc; // NEW
+                rs_entries[alloc_idx].alusrc    <= i_alusrc;
+                rs_entries[alloc_idx].memwrite  <= i_memwrite; // NEW
                 
-                rs_entries[alloc_idx].rs1_ready <= i_rs1_ready || (i_cdb_valid && i_cdb_prd == i_prs1 && i_prs1 != 0);
-                rs_entries[alloc_idx].rs2_ready <= i_rs2_ready || (i_cdb_valid && i_cdb_prd == i_prs2 && i_prs2 != 0);
+                rs_entries[alloc_idx].rs1_ready <= i_rs1_ready ||
+                                                   (i_cdb_valid && i_cdb_prd == i_prs1 && i_prs1 != 0);
+                rs_entries[alloc_idx].rs2_ready <= i_rs2_ready ||
+                                                   (i_cdb_valid && i_cdb_prd == i_prs2 && i_prs2 != 0);
             end
 
             // 2. WAKEUP
