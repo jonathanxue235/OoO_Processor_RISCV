@@ -67,8 +67,7 @@ module OoO_top #(
   logic [6:0] rename_to_skid_old_prd; // Old Phys Dest (For ROB)
   logic [3:0] rename_to_skid_rob_tag;
   
-  // -- Control Signals (Bypassing Skid Buffer) --
-  // These signals come from Rename (passed through from Decode) and go directly to Dispatch/RS
+  // -- Control Signals Passed Through Rename (Bypass) --
   logic [1:0] rename_to_skid_futype;
   logic [1:0] rename_to_skid_alu_op;
   T           rename_to_skid_immediate;
@@ -84,7 +83,10 @@ module OoO_top #(
   logic [6:0] skid_to_dispatch_old_prd; // Old Phys Dest (For ROB)
   logic [3:0] skid_to_dispatch_rob_tag;
   
-  // Note: Control signals (FUtype, ALUOp, Imm, Branch) are NOT here anymore.
+  logic [1:0] skid_to_dispatch_futype;
+  logic [1:0] skid_to_dispatch_alu_op;
+  T           skid_to_dispatch_immediate;
+  logic       skid_to_dispatch_branch;
 
   // DISPATCH STAGE & ROB & RS WIRES
   logic dispatch_to_skid_ready;
@@ -255,10 +257,8 @@ module OoO_top #(
   );
 
   // ---------------------------------------------------------------------------------
-  // Pass-Through Signal Assignments (Decode -> Rename -> Dispatch Bypass)
+  // Pass-Through Signal Assignments (Decode -> Rename -> Dispatch)
   // ---------------------------------------------------------------------------------
-  // We capture these from the "Skid to Rename" stage. Since Rename is combinational
-  // for these signals (it doesn't modify opcode/imm), we pass them directly.
   assign rename_to_skid_pc       = skid_to_rename_pc;
   assign rename_to_skid_futype   = skid_to_rename_FUtype;
   assign rename_to_skid_alu_op   = skid_to_rename_ALUOp;
@@ -269,21 +269,26 @@ module OoO_top #(
   // 7. Skid Buffer: Rename -> Dispatch
   // ---------------------------------------------------------------------------------
   // Width Calculation:
-  // PC(9) + PRS1(7) + PRS2(7) + PRD(7) + OLD_PRD(7) + ROB(4) = 41 bits
-  // REMOVED: FUTYPE, ALUOP, IMM, BRANCH (Bypassed)
+  // PC(9) + PRS1(7) + PRS2(7) + PRD(7) + OLD_PRD(7) + ROB(4) = 41
+  // + FUTYPE(2) + ALUOP(2) + IMM(32) + BRANCH(1) = 37
+  // Total = 78
   pipe_skid_buffer #(
-    .DWIDTH(41) 
+    .DWIDTH(78) 
   ) skid_buffer_rename_dispatch (
     .clk(clk),                                      
     .reset(rst),                                    
     .i_data({rename_to_skid_pc, rename_to_skid_prs1, 
              rename_to_skid_prs2, rename_to_skid_prd,
-             rename_to_skid_old_prd, rename_to_skid_rob_tag}),      
+             rename_to_skid_old_prd, rename_to_skid_rob_tag,
+             rename_to_skid_futype, rename_to_skid_alu_op,
+             rename_to_skid_immediate, rename_to_skid_branch}),      
     .i_valid(rename_to_skid_valid),                 
     .o_ready(skid_to_rename_ready),                 
     .o_data({skid_to_dispatch_pc, skid_to_dispatch_prs1, 
              skid_to_dispatch_prs2, skid_to_dispatch_prd,
-             skid_to_dispatch_old_prd, skid_to_dispatch_rob_tag}),  
+             skid_to_dispatch_old_prd, skid_to_dispatch_rob_tag,
+             skid_to_dispatch_futype, skid_to_dispatch_alu_op,
+             skid_to_dispatch_immediate, skid_to_dispatch_branch}),  
     .o_valid(skid_to_dispatch_valid),               
     .i_ready(dispatch_to_skid_ready)                
   );
@@ -295,12 +300,10 @@ module OoO_top #(
   // ---------------------------------------------------------------------------------
   // 8. Dispatch Controller (Routing Logic)
   // ---------------------------------------------------------------------------------
-  // Note: Uses the BYPASSED 'rename_to_skid_futype' because the skid buffer 
-  // no longer carries it.
   dispatch dispatch_unit (
       // Inputs
       .i_valid(skid_to_dispatch_valid),
-      .i_futype(rename_to_skid_futype), // BYPASSED SIGNAL
+      .i_futype(skid_to_dispatch_futype),
 
       // Backpressure Inputs
       .rob_full(rob_full),
@@ -332,7 +335,7 @@ module OoO_top #(
       .i_valid(dispatch_alloc_rob), // From Dispatch
       .i_tag(skid_to_dispatch_rob_tag),
       .i_old_prd(skid_to_dispatch_old_prd),
-      .i_is_branch(rename_to_skid_branch), // BYPASSED SIGNAL
+      .i_is_branch(skid_to_dispatch_branch),
       .i_pc({23'b0, skid_to_dispatch_pc}), // Zero-pad PC to 32 bits
       
       .o_full(rob_full),
@@ -368,10 +371,8 @@ module OoO_top #(
       .i_prs2(skid_to_dispatch_prs2),
       .i_prd(skid_to_dispatch_prd),
       .i_rob_tag(skid_to_dispatch_rob_tag),
-      
-      // Bypassed Signals
-      .i_imm(rename_to_skid_immediate), 
-      .i_alu_op({2'b00, rename_to_skid_alu_op}), // Zero-pad
+      .i_imm(skid_to_dispatch_immediate),
+      .i_alu_op({2'b00, skid_to_dispatch_alu_op}), // Zero-pad 2-bit OP to 4-bit port
 
       // Operand Readiness (Phase 2: Assume Ready)
       .i_rs1_ready(1'b1),
@@ -405,12 +406,8 @@ module OoO_top #(
       .i_valid(dispatch_alloc_branch),
       .i_pc({23'b0, skid_to_dispatch_pc}),
       .i_prs1(skid_to_dispatch_prs1), .i_prs2(skid_to_dispatch_prs2), .i_prd(skid_to_dispatch_prd),
-      .i_rob_tag(skid_to_dispatch_rob_tag), 
-      
-      // Bypassed Signals
-      .i_imm(rename_to_skid_immediate), 
-      .i_alu_op({2'b00, rename_to_skid_alu_op}),
-      
+      .i_rob_tag(skid_to_dispatch_rob_tag), .i_imm(skid_to_dispatch_immediate), 
+      .i_alu_op({2'b00, skid_to_dispatch_alu_op}),
       .i_rs1_ready(1'b1), .i_rs2_ready(1'b1),
       .o_full(branch_rs_full),
       .i_eu_ready(1'b1), 
@@ -431,12 +428,8 @@ module OoO_top #(
       .i_valid(dispatch_alloc_lsu),
       .i_pc({23'b0, skid_to_dispatch_pc}),
       .i_prs1(skid_to_dispatch_prs1), .i_prs2(skid_to_dispatch_prs2), .i_prd(skid_to_dispatch_prd),
-      .i_rob_tag(skid_to_dispatch_rob_tag), 
-      
-      // Bypassed Signals
-      .i_imm(rename_to_skid_immediate), 
-      .i_alu_op({2'b00, rename_to_skid_alu_op}),
-      
+      .i_rob_tag(skid_to_dispatch_rob_tag), .i_imm(skid_to_dispatch_immediate), 
+      .i_alu_op({2'b00, skid_to_dispatch_alu_op}),
       .i_rs1_ready(1'b1), .i_rs2_ready(1'b1),
       .o_full(lsu_rs_full),
       .i_eu_ready(1'b1), 
