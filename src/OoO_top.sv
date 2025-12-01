@@ -12,7 +12,7 @@ module OoO_top #(
   
   // INSTRUCTION CACHE STAGE
   T cache_to_fetch_instr;
-  
+
   // FETCH STAGE
   logic [8:0] fetch_to_cache_pc;
   logic fetch_to_skid_valid;
@@ -71,7 +71,8 @@ module OoO_top #(
   T           rename_to_skid_immediate;
   logic       rename_to_skid_branch;
   logic       rename_to_skid_alusrc;
-  logic       rename_to_skid_memwrite; // NEW: MemWrite pass-through
+  logic       rename_to_skid_memwrite; 
+  logic       rename_to_skid_regwrite; // NEW: RegWrite from Rename
 
   // SKID BUFFER BETWEEN RENAME AND DISPATCH
   logic skid_to_rename_ready;
@@ -87,7 +88,8 @@ module OoO_top #(
   T           skid_to_dispatch_immediate;
   logic       skid_to_dispatch_branch;
   logic       skid_to_dispatch_alusrc;
-  logic       skid_to_dispatch_memwrite; // NEW: MemWrite from Skid
+  logic       skid_to_dispatch_memwrite; 
+  logic       skid_to_dispatch_regwrite; // NEW: RegWrite to Dispatch
 
   // PHYSICAL REGISTER FILE READ DATA 
   logic [31:0] alu_op_a, alu_op_b;
@@ -100,13 +102,13 @@ module OoO_top #(
   logic alu_rs_full;
   logic branch_rs_full;
   logic lsu_rs_full;
-  
+
   // Allocation Signals from Dispatch Controller
   logic dispatch_alloc_rob;
   logic dispatch_alloc_alu;
   logic dispatch_alloc_branch;
   logic dispatch_alloc_lsu;
-  
+
   // Commit Signals from ROB
   logic commit_valid;
   logic [6:0] commit_old_preg;
@@ -156,7 +158,7 @@ module OoO_top #(
   logic [31:0] lsu_issue_imm;
   logic [3:0]  lsu_issue_op;
   logic [31:0] lsu_issue_pc;
-  logic        lsu_issue_memwrite; // NEW: Output from RS to LSU
+  logic        lsu_issue_memwrite;
   
   // Writeback (EU -> PRF/ROB)
   logic        lsu_wb_valid;
@@ -172,9 +174,6 @@ module OoO_top #(
   // =================================================================================
   // BUSY TABLE (SCOREBOARD) LOGIC
   // =================================================================================
-  // Tracks the readiness of every physical register.
-  // 1 = Ready (Data available in PRF)
-  // 0 = Busy (Waiting for Writer)
   logic [127:0] phys_reg_busy;
 
   always_ff @(posedge clk) begin
@@ -248,19 +247,18 @@ module OoO_top #(
     .o_valid(decode_to_skid_valid),                 
     .rs1(decode_to_skid_rs1),                      
     .rs2(decode_to_skid_rs2),      
-    .rd(decode_to_skid_rd),                         
+    .rd(decode_to_skid_rd),            
     .ALUsrc(decode_to_skid_ALUsrc),                 
     .Branch(decode_to_skid_Branch),                 
     .immediate(decode_to_skid_immediate),       
     .ALUOp(decode_to_skid_ALUOp),
     .FUtype(decode_to_skid_FUtype),                 
-    .Memread(decode_to_skid_Memread),               
+    .Memread(decode_to_skid_Memread),     
     .Memwrite(decode_to_skid_Memwrite),             
     .Regwrite(decode_to_skid_Regwrite)  
   );
 
   // 5. Skid Buffer: Decode -> Rename
-  // DWIDTH 67
   pipe_skid_buffer #(
     .DWIDTH(67) 
   ) skid_buffer_decode_rename (
@@ -273,14 +271,14 @@ module OoO_top #(
              decode_to_skid_FUtype, decode_to_skid_Memread,
              decode_to_skid_Memwrite, decode_to_skid_Regwrite}), 
     .i_valid(decode_to_skid_valid),           
-    .o_ready(skid_to_decode_ready),                  
+    .o_ready(skid_to_decode_ready),          
     .o_data({skid_to_rename_pc, skid_to_rename_rs1, 
              skid_to_rename_rs2, skid_to_rename_rd,
              skid_to_rename_ALUsrc, skid_to_rename_Branch, 
              skid_to_rename_immediate, skid_to_rename_ALUOp,
              skid_to_rename_FUtype, skid_to_rename_Memread,
              skid_to_rename_Memwrite, skid_to_rename_Regwrite}), 
-    .o_valid(skid_to_rename_valid),                  
+    .o_valid(skid_to_rename_valid),          
     .i_ready(rename_to_skid_ready)                  
   );
 
@@ -298,15 +296,16 @@ module OoO_top #(
     
     // Outputs
     .dispatch_valid(rename_to_skid_valid),  
-    .dispatch_prs1(rename_to_skid_prs1),            
+    .dispatch_prs1(rename_to_skid_prs1),           
     .dispatch_prs2(rename_to_skid_prs2),            
     .dispatch_prd(rename_to_skid_prd),              
     .dispatch_old_prd(rename_to_skid_old_prd),      
-    .dispatch_rob_tag(rename_to_skid_rob_tag),    
+    .dispatch_rob_tag(rename_to_skid_rob_tag),
+    .dispatch_reg_write(rename_to_skid_regwrite), // NEW
     .rename_ready(rename_to_skid_ready),            
     
     // Commit Inputs
-    .commit_en(commit_valid),                       
+    .commit_en(commit_valid),                 
     .commit_old_preg(commit_old_preg),              
     
     // Branch Recovery
@@ -320,12 +319,12 @@ module OoO_top #(
   assign rename_to_skid_immediate= skid_to_rename_immediate;
   assign rename_to_skid_branch   = skid_to_rename_Branch;
   assign rename_to_skid_alusrc   = skid_to_rename_ALUsrc;
-  assign rename_to_skid_memwrite = skid_to_rename_Memwrite; // NEW Pass-through
+  assign rename_to_skid_memwrite = skid_to_rename_Memwrite;
 
   // 7. Skid Buffer: Rename -> Dispatch
-  // DWIDTH Increased: 81 -> 82 (+1 for MemWrite)
+  // DWIDTH Increased: 82 -> 83 (+1 for RegWrite)
   pipe_skid_buffer #(
-    .DWIDTH(82) 
+    .DWIDTH(83) 
   ) skid_buffer_rename_dispatch (
     .clk(clk),                              
     .reset(rst),                           
@@ -335,7 +334,8 @@ module OoO_top #(
              rename_to_skid_futype, rename_to_skid_alu_op,
              rename_to_skid_immediate, rename_to_skid_branch, 
              rename_to_skid_alusrc,
-             rename_to_skid_memwrite}), // NEW
+             rename_to_skid_memwrite, 
+             rename_to_skid_regwrite}), // NEW
     .i_valid(rename_to_skid_valid),      
     .o_ready(skid_to_rename_ready),                 
     .o_data({skid_to_dispatch_pc, skid_to_dispatch_prs1, 
@@ -344,7 +344,8 @@ module OoO_top #(
              skid_to_dispatch_futype, skid_to_dispatch_alu_op,
              skid_to_dispatch_immediate, skid_to_dispatch_branch,
              skid_to_dispatch_alusrc,
-             skid_to_dispatch_memwrite}), // NEW
+             skid_to_dispatch_memwrite,
+             skid_to_dispatch_regwrite}), // NEW
     .o_valid(skid_to_dispatch_valid),               
     .i_ready(dispatch_to_skid_ready)                 
   );
@@ -395,6 +396,7 @@ module OoO_top #(
       .i_tag(skid_to_dispatch_rob_tag),
       .i_old_prd(skid_to_dispatch_old_prd),
       .i_is_branch(skid_to_dispatch_branch),
+      .i_reg_write(skid_to_dispatch_regwrite), // NEW
       .i_pc({23'b0, skid_to_dispatch_pc}),
       .o_full(rob_full),
       .i_cdb_valid(cdb_valid),
@@ -488,7 +490,7 @@ module OoO_top #(
       .i_rob_tag(skid_to_dispatch_rob_tag), .i_imm(skid_to_dispatch_immediate), 
       .i_alu_op(skid_to_dispatch_alu_op),
       .i_alusrc(1'b1),
-      .i_memwrite(skid_to_dispatch_memwrite), // NEW: Capture MemWrite
+      .i_memwrite(skid_to_dispatch_memwrite), 
       .i_cdb_valid(cdb_valid),
       .i_cdb_prd(cdb_prd),
       
@@ -506,7 +508,7 @@ module OoO_top #(
       .o_issue_imm(lsu_issue_imm),
       .o_issue_alu_op(lsu_issue_op),
       .o_issue_pc(lsu_issue_pc),
-      .o_issue_memwrite(lsu_issue_memwrite), // NEW: Issue MemWrite
+      .o_issue_memwrite(lsu_issue_memwrite), 
       
       .branch_mispredict(1'b0)
   );
@@ -606,4 +608,5 @@ module OoO_top #(
       .o_rob_tag(lsu_cdb_tag),     
       .o_valid(lsu_wb_valid)       
   );
+
 endmodule

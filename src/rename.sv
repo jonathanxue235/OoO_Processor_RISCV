@@ -19,7 +19,6 @@ module rename #(
     input logic decode_reg_write,
     
     input logic i_ready,
-    // (Pass-through signals like immediate, opcode, etc. would go here)
     
     // ------------------------------------
     // Interface to Dispatch / Issue
@@ -31,6 +30,9 @@ module rename #(
     output logic [PREG_WIDTH-1:0] dispatch_old_prd, // Old Phys Dest (For ROB)
     output logic [ROB_WIDTH-1:0] dispatch_rob_tag,
     
+    // NEW: Propagate RegWrite to ROB
+    output logic dispatch_reg_write,
+
     // Stall Signal (Backpressure to Decode)
     output logic rename_ready,
 
@@ -45,11 +47,10 @@ module rename #(
     // ------------------------------------
     input logic branch_mispredict
 );
-
     // Internal Signals
     logic free_list_valid;
     logic [PREG_WIDTH-1:0] new_preg;
-    
+
     // We write to a register if the instruction is valid, the decoder says so, AND it's not x0
     logic actual_reg_write;
     assign actual_reg_write = decode_valid && decode_reg_write && (decode_rd != 0);
@@ -114,8 +115,11 @@ module rename #(
     // ------------------------------------
     // Output Assignment
     // ------------------------------------
-    // FIX: If we aren't actually writing to a register (e.g., Branch, Store, or rd=x0),
-    //      force the destination physical register to 0.
+    // If we aren't actually writing to a register (e.g., Branch, Store, or rd=x0),
+    // force the destination physical register to 0.
     assign dispatch_prd = actual_reg_write ? new_preg : '0;
+
+    // NEW: Assign RegWrite Output
+    assign dispatch_reg_write = actual_reg_write;
 
 endmodule
