@@ -35,7 +35,7 @@ module OoO_top #(
   logic decode_to_skid_ALUsrc;
   logic decode_to_skid_Branch;
   T decode_to_skid_immediate;
-  logic [3:0] decode_to_skid_ALUOp; // CHANGED: Expanded to 4 bits to match ALU Unit
+  logic [3:0] decode_to_skid_ALUOp; // 4-bit
   logic [1:0] decode_to_skid_FUtype;
   logic decode_to_skid_Memread;
   logic decode_to_skid_Memwrite;
@@ -51,7 +51,7 @@ module OoO_top #(
   logic skid_to_rename_ALUsrc;
   logic skid_to_rename_Branch;
   T skid_to_rename_immediate;
-  logic [3:0] skid_to_rename_ALUOp; // CHANGED: Expanded to 4 bits
+  logic [3:0] skid_to_rename_ALUOp; // 4-bit
   logic [1:0] skid_to_rename_FUtype;
   logic skid_to_rename_Memread;
   logic skid_to_rename_Memwrite;
@@ -67,9 +67,10 @@ module OoO_top #(
   logic [6:0] rename_to_skid_old_prd; // Old Phys Dest (For ROB)
   logic [3:0] rename_to_skid_rob_tag;
   logic [1:0] rename_to_skid_futype;
-  logic [3:0] rename_to_skid_alu_op; // CHANGED: Expanded to 4 bits
+  logic [3:0] rename_to_skid_alu_op; // 4-bit
   T           rename_to_skid_immediate;
   logic       rename_to_skid_branch;
+  logic       rename_to_skid_alusrc; // NEW: ALUsrc pass-through
 
   // SKID BUFFER BETWEEN RENAME AND DISPATCH
   logic skid_to_rename_ready;
@@ -81,9 +82,10 @@ module OoO_top #(
   logic [6:0] skid_to_dispatch_old_prd; // Old Phys Dest (For ROB)
   logic [3:0] skid_to_dispatch_rob_tag;
   logic [1:0] skid_to_dispatch_futype;
-  logic [3:0] skid_to_dispatch_alu_op; // CHANGED: Expanded to 4 bits
+  logic [3:0] skid_to_dispatch_alu_op; // 4-bit
   T           skid_to_dispatch_immediate;
   logic       skid_to_dispatch_branch;
+  logic       skid_to_dispatch_alusrc; // NEW: ALUsrc from Skid
 
   // PHYSICAL REGISTER FILE READ DATA 
   logic [31:0] alu_op_a, alu_op_b;
@@ -119,6 +121,7 @@ module OoO_top #(
   logic [31:0] alu_issue_imm;
   logic [3:0]  alu_issue_op;
   logic [31:0] alu_issue_pc;
+  logic        alu_issue_alusrc; // NEW: ALUsrc from RS
   // Writeback (EU -> PRF/ROB)
   logic        alu_wb_valid;
   logic [31:0] alu_wb_data;
@@ -204,7 +207,7 @@ module OoO_top #(
   ) fetch_inst (
     .clk(clk),                                      
     .reset(rst),                            
-    .take_branch(1'b0), // No branch recovery wiring yet for Phase 3
+    .take_branch(1'b0), // No branch recovery wiring yet
     .branch_loc(32'b0),    
     .instr_from_cache(cache_to_fetch_instr),       
     .pc_to_cache(fetch_to_cache_pc),    
@@ -303,7 +306,7 @@ module OoO_top #(
     .commit_old_preg(commit_old_preg),              
     
     // Branch Recovery
-    .branch_mispredict(1'b0) // Phase 2: No branch handling yet
+    .branch_mispredict(1'b0) 
   );
 
   // Pass-Through Signal Assignments (Decode -> Rename -> Dispatch)
@@ -312,11 +315,12 @@ module OoO_top #(
   assign rename_to_skid_alu_op   = skid_to_rename_ALUOp;
   assign rename_to_skid_immediate= skid_to_rename_immediate;
   assign rename_to_skid_branch   = skid_to_rename_Branch;
+  assign rename_to_skid_alusrc   = skid_to_rename_ALUsrc; // NEW: Pass-through
 
   // 7. Skid Buffer: Rename -> Dispatch
-  // DWIDTH Increased: 78 -> 80 (+2 for expanded ALUOp)
+  // DWIDTH Increased: 78 -> 81 (+2 for ALUOp, +1 for ALUsrc)
   pipe_skid_buffer #(
-    .DWIDTH(80) 
+    .DWIDTH(81) 
   ) skid_buffer_rename_dispatch (
     .clk(clk),                              
     .reset(rst),                                    
@@ -324,14 +328,16 @@ module OoO_top #(
              rename_to_skid_prs2, rename_to_skid_prd,
              rename_to_skid_old_prd, rename_to_skid_rob_tag,
              rename_to_skid_futype, rename_to_skid_alu_op, // 4-bit
-             rename_to_skid_immediate, rename_to_skid_branch}),      
+             rename_to_skid_immediate, rename_to_skid_branch, 
+             rename_to_skid_alusrc}), // NEW: ALUsrc
     .i_valid(rename_to_skid_valid),                 
     .o_ready(skid_to_rename_ready),                 
     .o_data({skid_to_dispatch_pc, skid_to_dispatch_prs1, 
              skid_to_dispatch_prs2, skid_to_dispatch_prd,
              skid_to_dispatch_old_prd, skid_to_dispatch_rob_tag,
              skid_to_dispatch_futype, skid_to_dispatch_alu_op, // 4-bit
-             skid_to_dispatch_immediate, skid_to_dispatch_branch}),  
+             skid_to_dispatch_immediate, skid_to_dispatch_branch,
+             skid_to_dispatch_alusrc}), // NEW: ALUsrc
     .o_valid(skid_to_dispatch_valid),               
     .i_ready(dispatch_to_skid_ready)                 
   );
@@ -357,7 +363,7 @@ module OoO_top #(
       if (branch_wb_valid) begin
           cdb_valid = 1'b1;
           cdb_tag   = branch_cdb_tag;
-          cdb_prd   = 7'b0; // Branches typically don't write registers
+          cdb_prd   = 7'b0; 
       end else if (lsu_wb_valid) begin
           cdb_valid = 1'b1;
           cdb_tag   = lsu_cdb_tag;
@@ -413,9 +419,9 @@ module OoO_top #(
       .i_cdb_valid(cdb_valid),
       .i_cdb_prd(cdb_prd),
       .i_alu_op(skid_to_dispatch_alu_op), // 4-bit connection
+      .i_alusrc(skid_to_dispatch_alusrc), // NEW: Capture ALUsrc
       
-      // LOGIC FIXED: Check Busy Table
-      // If PRD is 0 (x0), it is always ready. Otherwise check table.
+      // Check Busy Table
       .i_rs1_ready((skid_to_dispatch_prs1 == 0) || phys_reg_busy[skid_to_dispatch_prs1]),
       .i_rs2_ready((skid_to_dispatch_prs2 == 0) || phys_reg_busy[skid_to_dispatch_prs2]),
 
@@ -430,6 +436,7 @@ module OoO_top #(
       .o_issue_imm(alu_issue_imm),
       .o_issue_alu_op(alu_issue_op), 
       .o_issue_pc(alu_issue_pc),
+      .o_issue_alusrc(alu_issue_alusrc), // NEW: Output ALUsrc
       .branch_mispredict(1'b0)
   );
 
@@ -443,10 +450,10 @@ module OoO_top #(
       .i_prs1(skid_to_dispatch_prs1), .i_prs2(skid_to_dispatch_prs2), .i_prd(skid_to_dispatch_prd),
       .i_rob_tag(skid_to_dispatch_rob_tag), .i_imm(skid_to_dispatch_immediate), 
       .i_alu_op(skid_to_dispatch_alu_op), // 4-bit connection
+      .i_alusrc(1'b0), // Unused for branch
       .i_cdb_valid(cdb_valid),
       .i_cdb_prd(cdb_prd),
       
-      // LOGIC FIXED: Check Busy Table
       .i_rs1_ready((skid_to_dispatch_prs1 == 0) || phys_reg_busy[skid_to_dispatch_prs1]),
       .i_rs2_ready((skid_to_dispatch_prs2 == 0) || phys_reg_busy[skid_to_dispatch_prs2]),
       
@@ -475,10 +482,10 @@ module OoO_top #(
       .i_prs1(skid_to_dispatch_prs1), .i_prs2(skid_to_dispatch_prs2), .i_prd(skid_to_dispatch_prd),
       .i_rob_tag(skid_to_dispatch_rob_tag), .i_imm(skid_to_dispatch_immediate), 
       .i_alu_op(skid_to_dispatch_alu_op), // 4-bit connection
+      .i_alusrc(1'b1), // LSU typically uses immediate offset
       .i_cdb_valid(cdb_valid),
       .i_cdb_prd(cdb_prd),
       
-      // LOGIC FIXED: Check Busy Table
       .i_rs1_ready((skid_to_dispatch_prs1 == 0) || phys_reg_busy[skid_to_dispatch_prs1]),
       .i_rs2_ready((skid_to_dispatch_prs2 == 0) || phys_reg_busy[skid_to_dispatch_prs2]),
       
@@ -530,18 +537,17 @@ module OoO_top #(
       .lsu_wb_data(lsu_wb_data)
   );
 
-  // =================================================================================
-  // EXECUTION UNITS
-  // =================================================================================
-
   // 14. ALU Unit
   alu_unit #(
       .DATA_WIDTH(32), .ROB_WIDTH(4), .PREG_WIDTH(7)
   ) alu_instance (
       .i_op1(alu_op_a),            // From PRF
-      .i_op2(alu_op_b),            // From PRF
+      
+      // FIXED: Select Immediate if ALUsrc is set
+      .i_op2(alu_issue_alusrc ? alu_issue_imm : alu_op_b),            
+      
       .i_imm(alu_issue_imm),       // From RS
-      .i_pc(alu_issue_pc),         // From RS
+      .i_pc(alu_issue_pc),        
       .i_alu_op(alu_issue_op),     // From RS
       .i_valid(alu_issue_valid),   // From RS
       .i_prd(alu_issue_prd),       // From RS
