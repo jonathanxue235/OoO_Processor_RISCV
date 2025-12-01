@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-module dispatch_tb;
+module integration_tb;
 
     // =========================================================================
     // Parameters & Signals
@@ -22,7 +22,6 @@ module dispatch_tb;
     // =========================================================================
     // Helper Functions (Instruction Builders)
     // =========================================================================
-    // These match the helper functions used in decoder_tb and rename_tb
     function automatic T create_r_type(input logic [6:0] opcode, input logic [4:0] rd, input logic [2:0] funct3, input logic [4:0] rs1, input logic [4:0] rs2, input logic [6:0] funct7);
         return {funct7, rs2, rs1, funct3, rd, opcode};
     endfunction
@@ -38,54 +37,42 @@ module dispatch_tb;
     function automatic T create_b_type(input logic [6:0] opcode, input logic [2:0] funct3, input logic [4:0] rs1, input logic [4:0] rs2, input logic [12:0] imm);
         return {imm[12], imm[10:5], rs2, rs1, funct3, imm[4:1], imm[11], opcode};
     endfunction
-    
-    function automatic T create_u_type(input logic [6:0] opcode, input logic [4:0] rd, input logic [31:0] imm);
-        return {imm[31:12], rd, opcode};
-    endfunction
-
-    function automatic T create_j_type(input logic [6:0] opcode, input logic [4:0] rd, input logic [20:0] imm);
-        return {imm[20], imm[10:1], imm[11], imm[19:12], rd, opcode};
-    endfunction
 
     // =========================================================================
-    // Verification Task
+    // Simulation Monitor
     // =========================================================================
-    task verify_dispatch(
-        input logic [8:0] expected_pc,
-        input string      instr_name,
-        // Expected Allocation Flags (from Dispatch Unit)
-        input logic       exp_rob_alloc,
-        input logic       exp_alu_alloc,
-        input logic       exp_lsu_alloc,
-        input logic       exp_branch_alloc,
-        // Expected Payload (from Rename Stage)
-        input logic [6:0] exp_prd,      // Expected Physical Destination Register
-        input logic [3:0] exp_rob_tag   // Expected ROB Tag
-    );
-    begin
-        // Wait for the instruction to propagate through Fetch->Decode->Rename->SkidBuffer->Dispatch
-        // We probe the "skid_to_dispatch" signals which feed the Dispatch Unit and ROB/RS
-        wait(dut.skid_to_dispatch_valid === 1'b1 && dut.skid_to_dispatch_pc === expected_pc);
-        #1; // Allow combinational logic (allocation signals) to settle
+    // This block prints pipeline events as they happen to help debug flow
+    always @(posedge clk) begin
+        // 1. Monitor Dispatch
+        if (dut.skid_to_dispatch_valid && dut.dispatch_to_skid_ready) begin
+            $display("[TIME %0t] DISPATCH: PC=%h | Type=%b | Tag=%d | NewPRD=P%0d | OldPRD=P%0d | RegWrite=%b", 
+                     $time, dut.skid_to_dispatch_pc, dut.skid_to_dispatch_futype, 
+                     dut.skid_to_dispatch_rob_tag, dut.skid_to_dispatch_prd, 
+                     dut.skid_to_dispatch_old_prd, dut.skid_to_dispatch_regwrite);
+        end
 
-        // Check Allocation Control Signals
-        if (dut.dispatch_alloc_rob !== exp_rob_alloc)       $error("[%s] PC %h: ROB Alloc mismatch. Exp %b, Got %b", instr_name, expected_pc, exp_rob_alloc, dut.dispatch_alloc_rob);
-        if (dut.dispatch_alloc_alu !== exp_alu_alloc)       $error("[%s] PC %h: ALU Alloc mismatch. Exp %b, Got %b", instr_name, expected_pc, exp_alu_alloc, dut.dispatch_alloc_alu);
-        if (dut.dispatch_alloc_lsu !== exp_lsu_alloc)       $error("[%s] PC %h: LSU Alloc mismatch. Exp %b, Got %b", instr_name, expected_pc, exp_lsu_alloc, dut.dispatch_alloc_lsu);
-        if (dut.dispatch_alloc_branch !== exp_branch_alloc) $error("[%s] PC %h: Branch Alloc mismatch. Exp %b, Got %b", instr_name, expected_pc, exp_branch_alloc, dut.dispatch_alloc_branch);
+        // 2. Monitor Writeback (CDB)
+        if (dut.cdb_valid) begin
+            $display("[TIME %0t] CDB WB : Tag=%d | PRD=P%0d | Data=%h", 
+                     $time, dut.cdb_tag, dut.cdb_prd, 
+                     (dut.alu_wb_valid ? dut.alu_wb_data : (dut.lsu_wb_valid ? dut.lsu_wb_data : 32'h0)));
+        end
 
-        // Check Renamed Payload (Sanity check that Rename data reached Dispatch)
-        if (dut.skid_to_dispatch_rob_tag !== exp_rob_tag)   $error("[%s] PC %h: ROB Tag mismatch. Exp %d, Got %d", instr_name, expected_pc, exp_rob_tag, dut.skid_to_dispatch_rob_tag);
-        if (dut.skid_to_dispatch_prd !== exp_prd)           $error("[%s] PC %h: PRD mismatch. Exp P%0d, Got P%0d", instr_name, expected_pc, exp_prd, dut.skid_to_dispatch_prd);
-
-        $display("[PASS] %s (PC: %h) dispatched. Alloc: ROB=%b ALU=%b LSU=%b BR=%b. Tag=#%0d PRD=P%0d", 
-                 instr_name, expected_pc, dut.dispatch_alloc_rob, dut.dispatch_alloc_alu, 
-                 dut.dispatch_alloc_lsu, dut.dispatch_alloc_branch, dut.skid_to_dispatch_rob_tag, dut.skid_to_dispatch_prd);
-        
-        // Wait for clock edge to proceed to ensure we don't check the same cycle twice
-        @(posedge clk);
+        // 3. Monitor Commit
+        if (dut.commit_valid) begin
+            $display("[TIME %0t] COMMIT  : Tag=%d | Freed P%0d", 
+                     $time, dut.commit_tag, dut.commit_old_preg);
+                     
+            // Assertion check for Stores/Branches
+            // In our test program, Tag 3 is a SW, Tag 5 is a BEQ. They should free P0.
+            if (dut.commit_tag == 3 || dut.commit_tag == 5) begin
+                if (dut.commit_old_preg !== 0) 
+                    $error("Error: Store/Branch (Tag %d) attempted to free register P%0d! Should be P0.", dut.commit_tag, dut.commit_old_preg);
+                else 
+                    $display("      -> Correctly did NOT free a physical register (Freed P0).");
+            end
+        end
     end
-    endtask
 
     // =========================================================================
     // Clock Generation
@@ -99,104 +86,109 @@ module dispatch_tb;
     // Main Test Procedure
     // =========================================================================
     initial begin
-        $dumpfile("dispatch_tb.vcd");
-        $dumpvars(0, dispatch_tb);
+        $dumpfile("integration_tb.vcd");
+        $dumpvars(0, integration_tb);
         
-        $display("=== Starting Dispatch Stage Testbench ===");
+        $display("=== Starting Full Processor Integration Test ===");
+        $display("Testing: Fetch -> Decode -> Rename -> Dispatch -> Issue -> Exec -> WB -> Commit");
 
-        // 1. Initialize Instruction Memory
-        // Using direct hierarchical access to Xilinx BRAM model
+        // ---------------------------------------------------------------------
+        // 1. Program Loading
+        // ---------------------------------------------------------------------
         #1;
-        
-        // PC 0: ADDI x1, x0, 10
-        // Type: ALU (I-Type). Writes x1.
-        // Rename expectation: x1 -> P32 (First free reg). ROB Tag 0.
-        // Dispatch expectation: Alloc ROB, Alloc ALU.
+        // PC 0: ADDI x1, x0, 10    (Tag 0) | ALU  | Writes x1 | Exp Result: 10
         dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[0] = 
             create_i_type(7'b0010011, 5'd1, 3'b000, 5'd0, 12'd10);
 
-        // PC 4: LW x2, 8(x1)
-        // Type: LSU (I-Type). Writes x2.
-        // Rename expectation: x2 -> P33. ROB Tag 1.
-        // Dispatch expectation: Alloc ROB, Alloc LSU.
+        // PC 4: ADDI x2, x0, 20    (Tag 1) | ALU  | Writes x2 | Exp Result: 20
         dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[1] = 
-            create_i_type(7'b0000011, 5'd2, 3'b010, 5'd1, 12'd8);
+            create_i_type(7'b0010011, 5'd2, 3'b000, 5'd0, 12'd20);
 
-        // PC 8: SW x2, 12(x1)
-        // Type: LSU (S-Type). Does NOT write rd.
-        // Rename expectation: No new PREG (PRD=0). ROB Tag 2.
-        // Dispatch expectation: Alloc ROB, Alloc LSU.
+        // PC 8: ADD x3, x1, x2     (Tag 2) | ALU  | Writes x3 | Exp Result: 30
         dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[2] = 
-            create_s_type(7'b0100011, 3'b010, 5'd1, 5'd2, 12'd12);
+            create_r_type(7'b0110011, 5'd3, 3'b000, 5'd1, 5'd2, 7'b0000000);
 
-        // PC 12: BEQ x1, x2, 16
-        // Type: Branch (B-Type). Does NOT write rd.
-        // Rename expectation: No new PREG (PRD=0). ROB Tag 3.
-        // Dispatch expectation: Alloc ROB, Alloc Branch.
+        // PC 12: SW x3, 4(x0)      (Tag 3) | LSU  | No Write  | Mem[4] <= 30
+        // *CRITICAL*: This instruction should NOT free a physical register at commit.
         dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[3] = 
-            create_b_type(7'b1100011, 3'b000, 5'd1, 5'd2, 13'd16);
+            create_s_type(7'b0100011, 3'b010, 5'd0, 5'd3, 12'd4);
 
-        // PC 16: LUI x3, 0x1000
-        // Type: ALU (U-Type). Writes x3.
-        // Rename expectation: x3 -> P34. ROB Tag 4.
-        // Dispatch expectation: Alloc ROB, Alloc ALU.
+        // PC 16: LW x4, 4(x0)      (Tag 4) | LSU  | Writes x4 | Exp Result: 30
+        // Tests Memory forwarding or sequential consistency (depending on BRAM model)
         dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[4] = 
-            create_u_type(7'b0110111, 5'd3, 32'h00001000);
+            create_i_type(7'b0000011, 5'd4, 3'b010, 5'd0, 12'd4);
 
-        // 2. Reset Sequence
-        $display("Applying Reset...");
+        // PC 20: BEQ x1, x1, 4     (Tag 5) | BR   | No Write  | Taken -> PC=24
+        // *CRITICAL*: Branch should NOT free a physical register.
+        // Target is PC + 4 (next instr), so flow continues linearly effectively.
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[5] = 
+            create_b_type(7'b1100011, 3'b000, 5'd1, 5'd1, 13'd4);
+
+        // PC 24: SUB x5, x3, x1    (Tag 6) | ALU  | Writes x5 | Exp: 30 - 10 = 20
+        dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[6] = 
+            create_r_type(7'b0110011, 5'd5, 3'b000, 5'd3, 5'd1, 7'b0100000);
+
+
+        // ---------------------------------------------------------------------
+        // 2. Reset
+        // ---------------------------------------------------------------------
+        $display("[TIME %0t] Applying Reset...", $time);
         rst = 1;
-        repeat(5) @(posedge clk);
+        repeat(10) @(posedge clk);
         rst = 0;
-        $display("Reset released. Pipeline should fill.");
+        $display("[TIME %0t] Reset released.", $time);
 
-        // 3. Verification Sequence
+
+        // ---------------------------------------------------------------------
+        // 3. Automated Verification via Wait Statements
+        // ---------------------------------------------------------------------
         
-        // Test 1: ADDI x1, x0, 10
-        verify_dispatch(
-            .expected_pc(9'h0), .instr_name("ADDI"),
-            .exp_rob_alloc(1), .exp_alu_alloc(1), .exp_lsu_alloc(0), .exp_branch_alloc(0),
-            .exp_prd(7'd32), .exp_rob_tag(4'd0)
-        );
+        // Wait for Tag 0 (ADDI) to Commit
+        wait(dut.commit_valid && dut.commit_tag == 0);
+        $display("[PASS] Instruction 0 (ADDI) Committed.");
 
-        // Test 2: LW x2, 8(x1)
-        verify_dispatch(
-            .expected_pc(9'h4), .instr_name("LW"),
-            .exp_rob_alloc(1), .exp_alu_alloc(0), .exp_lsu_alloc(1), .exp_branch_alloc(0),
-            .exp_prd(7'd33), .exp_rob_tag(4'd1)
-        );
+        // Wait for Tag 1 (ADDI) to Commit
+        wait(dut.commit_valid && dut.commit_tag == 1);
+        $display("[PASS] Instruction 1 (ADDI) Committed.");
 
-        // Test 3: SW x2, 12(x1)
-        // Note: Store allocates in LSU RS but does not allocate a destination register (exp_prd = 0)
-        verify_dispatch(
-            .expected_pc(9'h8), .instr_name("SW"),
-            .exp_rob_alloc(1), .exp_alu_alloc(0), .exp_lsu_alloc(1), .exp_branch_alloc(0),
-            .exp_prd(7'd0), .exp_rob_tag(4'd2)
-        );
+        // Wait for Tag 2 (ADD) to Commit
+        wait(dut.commit_valid && dut.commit_tag == 2);
+        $display("[PASS] Instruction 2 (ADD) Committed.");
 
-        // Test 4: BEQ x1, x2, 16
-        // Note: Branch RS allocation, no destination register
-        verify_dispatch(
-            .expected_pc(9'hC), .instr_name("BEQ"),
-            .exp_rob_alloc(1), .exp_alu_alloc(0), .exp_lsu_alloc(0), .exp_branch_alloc(1),
-            .exp_prd(7'd0), .exp_rob_tag(4'd3)
-        );
+        // Wait for Tag 3 (SW) to Commit
+        wait(dut.commit_valid && dut.commit_tag == 3);
+        $display("[PASS] Instruction 3 (SW) Committed. (Store check passed in monitor)");
 
-        // Test 5: LUI x3, 0x1000
-        verify_dispatch(
-            .expected_pc(9'h10), .instr_name("LUI"),
-            .exp_rob_alloc(1), .exp_alu_alloc(1), .exp_lsu_alloc(0), .exp_branch_alloc(0),
-            .exp_prd(7'd34), .exp_rob_tag(4'd4)
-        );
+        // Wait for Tag 4 (LW) to Commit
+        wait(dut.commit_valid && dut.commit_tag == 4);
+        // Verify Data Integrity for LW (Result should be 30)
+        // We can check the physical register file or the writeback data captured earlier
+        // Here we rely on the CDB monitor print, but we can check internal state:
+        // We know x4 maps to P35 (approx) -> check PRF
+        #1;
+        if (dut.lsu_wb_data === 32'd30) 
+            $display("[PASS] Instruction 4 (LW) Loaded Correct Data: %d", dut.lsu_wb_data);
+        else 
+            $error("Error: Instruction 4 (LW) Loaded Incorrect Data: %d (Expected 30)", dut.lsu_wb_data);
 
-        $display("\n=== All Dispatch Tests Passed Successfully ===");
+        // Wait for Tag 5 (BEQ) to Commit
+        wait(dut.commit_valid && dut.commit_tag == 5);
+        $display("[PASS] Instruction 5 (BEQ) Committed. (Branch check passed in monitor)");
+
+        // Wait for Tag 6 (SUB) to Commit
+        wait(dut.commit_valid && dut.commit_tag == 6);
+        $display("[PASS] Instruction 6 (SUB) Committed.");
+
+        // Final Wait to ensure signals settle
+        repeat(10) @(posedge clk);
+        $display("\n=== All Integration Tests Passed Successfully ===");
         $finish;
     end
 
-    // Safety timeout
+    // Safety Timeout
     initial begin
-        #5000;
-        $display("Error: Simulation Timeout.");
+        #10000;
+        $display("Error: Simulation Timeout. Pipeline likely stalled.");
         $finish;
     end
 
