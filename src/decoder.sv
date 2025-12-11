@@ -1,3 +1,5 @@
+`timescale 1ns / 1ps
+
 module decoder#(
     parameter type T = logic [31:0]
 ) (
@@ -14,13 +16,13 @@ module decoder#(
     output logic    ALUsrc,
     output logic    Branch,
     output T        immediate,
-    output logic [3:0] ALUOp, // CHANGED: Expanded to 4 bits
+    output logic [3:0] ALUOp,
     output logic [1:0] FUtype,
     output logic    Memread,
     output logic    Memwrite,
     output logic    Regwrite
 );
-    // ... [Previous signal declarations remain the same] ...
+
     logic [6:0] opcode;
     logic [2:0] funct3;
     logic [6:0] funct7;
@@ -32,7 +34,7 @@ module decoder#(
     assign o_valid = i_valid;
     assign o_pc = i_pc;
 
-    // ... [Immediate generation block remains the same] ...
+    // Immediate Generation
     always_comb begin
         case (opcode)
             7'b0000011, 7'b0010011, 7'b1100111: immediate = {{20{instruction[31]}}, instruction[31:20]};
@@ -44,7 +46,7 @@ module decoder#(
         endcase
     end
 
-    // ALU Operation Codes (Must match alu_unit.sv)
+    // ALU Operation Codes
     localparam ALU_ADD   = 4'b0000;
     localparam ALU_SUB   = 4'b0001;
     localparam ALU_SLL   = 4'b0010;
@@ -59,7 +61,8 @@ module decoder#(
     // Main Control Logic
     always_comb begin
         // Defaults
-        ALUsrc = 0; Branch = 0; ALUOp = ALU_ADD; FUtype = 0;
+        ALUsrc = 0;
+        Branch = 0; ALUOp = ALU_ADD; FUtype = 0;
         Memread = 0; Memwrite = 0; Regwrite = 0;
         rs1 = 0; rs2 = 0; rd = 0;
 
@@ -71,13 +74,12 @@ module decoder#(
                 rs1 = instruction[19:15];
                 rs2 = instruction[24:20];
                 rd  = instruction[11:7];
-                // Decode specific ALU op
                 case (funct3)
                     3'b000: ALUOp = (funct7 == 7'b0100000) ? ALU_SUB : ALU_ADD;
                     3'b001: ALUOp = ALU_SLL;
                     3'b010: ALUOp = ALU_SLT;
                     3'b100: ALUOp = ALU_XOR;
-                    3'b101: ALUOp = ALU_SRL; // SRA not implemented in alu_unit yet
+                    3'b101: ALUOp = ALU_SRL;
                     3'b110: ALUOp = ALU_OR;
                     3'b111: ALUOp = ALU_AND;
                     default: ALUOp = ALU_ADD;
@@ -106,7 +108,8 @@ module decoder#(
             // Load
             7'b0000011: begin
                 ALUsrc = 1;
-                ALUOp = ALU_ADD; // Address Gen
+                // CHANGED: Pass funct3 to LSU via ALUOp
+                ALUOp = {1'b0, funct3}; 
                 FUtype = 2'b10; // LSU
                 Memread = 1;
                 Regwrite = 1;
@@ -117,7 +120,8 @@ module decoder#(
             // Store
             7'b0100011: begin
                 ALUsrc = 1;
-                ALUOp = ALU_ADD; // Address Gen
+                // CHANGED: Pass funct3 to LSU via ALUOp
+                ALUOp = {1'b0, funct3}; 
                 FUtype = 2'b10; // LSU
                 Memwrite = 1;
                 rs1 = instruction[19:15];
@@ -128,15 +132,7 @@ module decoder#(
             7'b1100011: begin
                 Branch = 1;
                 FUtype = 2'b01; // Branch Unit
-                // ALUOp for Branch unit is somewhat don't care, 
-                // but usually we passfunct3 via another path or encode it. 
-                // For now, keep as 0 or generic. 
-                // Note: Your OoO_top passes 'skid_to_dispatch_alu_op' to Branch RS.
-                // We should ensure the branch unit gets the funct3.
-                // Your Branch Unit uses 'i_funct3'. 
-                // Current OoO_top wires: .i_funct3(branch_issue_op[2:0])
-                // So we must pass funct3 in ALUOp [2:0]
-                ALUOp = {1'b0, funct3}; 
+                ALUOp = {1'b0, funct3};
                 rs1 = instruction[19:15];
                 rs2 = instruction[24:20];
             end
@@ -161,15 +157,17 @@ module decoder#(
 
             // JAL
             7'b1101111: begin
-                ALUsrc = 1; Branch = 1;
-                FUtype = 2'b01; // Branch Unit
+                ALUsrc = 1;
+                Branch = 1;
+                FUtype = 2'b01; 
                 Regwrite = 1;
                 rd = instruction[11:7];
             end
 
             // JALR
             7'b1100111: begin
-                ALUsrc = 1; Branch = 1;
+                ALUsrc = 1;
+                Branch = 1;
                 FUtype = 2'b01;
                 Regwrite = 1;
                 rs1 = instruction[19:15];
