@@ -8,18 +8,17 @@ module reservation_station #(
     input logic clk,
     input logic reset,
 
-    // Allocation Interface
+    // Allocation
     input logic i_valid,          
     input logic [31:0]           i_pc,
     input logic [PREG_WIDTH-1:0] i_prs1,
     input logic [PREG_WIDTH-1:0] i_prs2,
-    
     input logic [PREG_WIDTH-1:0] i_prd,
     input logic [ROB_WIDTH-1:0]  i_rob_tag,
     input logic [31:0]           i_imm,
     input logic [3:0]            i_alu_op,
-    input logic                  i_alusrc, // Input from Dispatch
-    input logic                  i_memwrite, // NEW: Input from Dispatch
+    input logic                  i_alusrc, 
+    input logic                  i_memwrite,
 
     // Initial Readiness
     input logic i_rs1_ready,
@@ -27,11 +26,11 @@ module reservation_station #(
 
     output logic o_full,
 
-    // Writeback / Wakeup
+    // Writeback
     input logic                  i_cdb_valid,
     input logic [PREG_WIDTH-1:0] i_cdb_prd,
 
-    // Issue Interface
+    // Issue
     input  logic i_eu_ready,
     output logic o_issue_valid,
     output logic [PREG_WIDTH-1:0] o_issue_prs1,
@@ -41,13 +40,14 @@ module reservation_station #(
     output logic [31:0]           o_issue_imm,
     output logic [3:0]            o_issue_alu_op,
     output logic [31:0]           o_issue_pc,
-    output logic                  o_issue_alusrc, // Output to EU Mux
-    output logic                  o_issue_memwrite, // NEW: Output to EU
+    output logic                  o_issue_alusrc,
+    output logic                  o_issue_memwrite,
 
     // Recovery
-    input logic branch_mispredict
+    input logic branch_mispredict,
+    input logic [ROB_WIDTH-1:0] i_mispredict_tag, // NEW
+    input logic [ROB_WIDTH-1:0] i_rob_head        // NEW
 );
-    // RS Entry Struct
     typedef struct packed {
         logic valid;
         logic rs1_ready;
@@ -60,47 +60,37 @@ module reservation_station #(
         logic [3:0]            alu_op;
         logic [31:0]           pc;
         logic                  alusrc;
-        logic                  memwrite; // NEW: Store MemWrite bit
+        logic                  memwrite;
     } rs_entry_t;
 
     rs_entry_t rs_entries [0:RS_SIZE-1];
-
-    // --- Allocation (Priority Encoder) ---
-    logic [31:0] alloc_idx;
-    logic        found_free;
+    
+    // Priority Encoders
+    logic [31:0] alloc_idx, issue_idx;
+    logic found_free, found_ready;
 
     always_comb begin
-        alloc_idx = 0;
-        found_free = 0;
+        alloc_idx = 0; found_free = 0;
         for (int i = 0; i < RS_SIZE; i++) begin
             if (!rs_entries[i].valid) begin
-                alloc_idx = i;
-                found_free = 1;
-                break;
+                alloc_idx = i; found_free = 1; break;
             end
         end
     end
 
     assign o_full = !found_free;
-
-    // --- Issue (Priority Encoder) ---
-    logic [31:0] issue_idx;
-    logic        found_ready;
-
+    
     always_comb begin
-        issue_idx = 0;
-        found_ready = 0;
+        issue_idx = 0; found_ready = 0;
         for (int i = 0; i < RS_SIZE; i++) begin
             if (rs_entries[i].valid && rs_entries[i].rs1_ready && rs_entries[i].rs2_ready) begin
-                issue_idx = i;
-                found_ready = 1;
-                break;
+                issue_idx = i; found_ready = 1; break;
             end
         end
     end
 
     assign o_issue_valid = found_ready;
-
+    
     always_comb begin
         if (found_ready) begin
             o_issue_prs1    = rs_entries[issue_idx].prs1;
@@ -111,30 +101,46 @@ module reservation_station #(
             o_issue_alu_op  = rs_entries[issue_idx].alu_op;
             o_issue_pc      = rs_entries[issue_idx].pc;
             o_issue_alusrc  = rs_entries[issue_idx].alusrc;
-            o_issue_memwrite = rs_entries[issue_idx].memwrite; // NEW
+            o_issue_memwrite = rs_entries[issue_idx].memwrite; 
         end else begin
-            o_issue_prs1 = '0;
-            o_issue_prs2 = '0; o_issue_prd = '0;
+            o_issue_prs1 = '0; o_issue_prs2 = '0; o_issue_prd = '0;
             o_issue_rob_tag = '0; o_issue_imm = '0; o_issue_alu_op = '0; 
-            o_issue_pc = '0;
-            o_issue_alusrc = '0;
-            o_issue_memwrite = '0; // NEW
+            o_issue_pc = '0; o_issue_alusrc = '0; o_issue_memwrite = '0;
         end
     end
 
-    // --- Sequential Logic ---
     always_ff @(posedge clk) begin
-        if (reset || branch_mispredict) begin
+        if (reset) begin
             for (int i = 0; i < RS_SIZE; i++) begin
                 rs_entries[i].valid <= 0;
                 rs_entries[i].rs1_ready <= 0;
                 rs_entries[i].rs2_ready <= 0;
-                rs_entries[i].memwrite <= 0; // NEW
+                rs_entries[i].memwrite <= 0;
             end
         end
         else begin
-            // 1. ALLOCATION
-            if (i_valid && !o_full) begin
+            if (branch_mispredict) begin
+                // === RS SELECTIVE FLUSH ===
+                for (int i = 0; i < RS_SIZE; i++) begin
+                    if (rs_entries[i].valid) begin
+                        logic preserve;
+                        if (i_mispredict_tag >= i_rob_head) begin
+                            preserve = (rs_entries[i].rob_tag >= i_rob_head && rs_entries[i].rob_tag <= i_mispredict_tag);
+                        end else begin
+                            preserve = (rs_entries[i].rob_tag >= i_rob_head || rs_entries[i].rob_tag <= i_mispredict_tag);
+                        end
+                        
+                        if (!preserve) begin
+                            rs_entries[i].valid <= 0;
+                            rs_entries[i].rs1_ready <= 0;
+                            rs_entries[i].rs2_ready <= 0;
+                        end
+                    end
+                end
+            end
+            
+            // Allocation
+            if (i_valid && !o_full && !branch_mispredict) begin
                 rs_entries[alloc_idx].valid     <= 1'b1;
                 rs_entries[alloc_idx].prs1      <= i_prs1;
                 rs_entries[alloc_idx].prs2      <= i_prs2;
@@ -144,15 +150,13 @@ module reservation_station #(
                 rs_entries[alloc_idx].alu_op    <= i_alu_op;
                 rs_entries[alloc_idx].pc        <= i_pc;
                 rs_entries[alloc_idx].alusrc    <= i_alusrc;
-                rs_entries[alloc_idx].memwrite  <= i_memwrite; // NEW
+                rs_entries[alloc_idx].memwrite  <= i_memwrite;
                 
-                rs_entries[alloc_idx].rs1_ready <= i_rs1_ready ||
-                                                   (i_cdb_valid && i_cdb_prd == i_prs1 && i_prs1 != 0);
-                rs_entries[alloc_idx].rs2_ready <= i_rs2_ready ||
-                                                   (i_cdb_valid && i_cdb_prd == i_prs2 && i_prs2 != 0);
+                rs_entries[alloc_idx].rs1_ready <= i_rs1_ready || (i_cdb_valid && i_cdb_prd == i_prs1 && i_prs1 != 0);
+                rs_entries[alloc_idx].rs2_ready <= i_rs2_ready || (i_cdb_valid && i_cdb_prd == i_prs2 && i_prs2 != 0);
             end
 
-            // 2. WAKEUP
+            // Wakeup
             if (i_cdb_valid) begin
                 for (int i = 0; i < RS_SIZE; i++) begin
                     if (rs_entries[i].valid) begin
@@ -164,7 +168,7 @@ module reservation_station #(
                 end
             end
 
-            // 3. ISSUE
+            // Issue
             if (found_ready && i_eu_ready) begin
                 rs_entries[issue_idx].valid <= 0;
                 rs_entries[issue_idx].rs1_ready <= 0;
