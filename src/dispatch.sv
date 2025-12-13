@@ -10,30 +10,31 @@ module dispatch (
     input logic alu_rs_full,
     input logic branch_rs_full,
     input logic lsu_rs_full,
+    
+    // Stall Input (from OoO_top logic)
+    input logic i_stall_dispatch, 
 
     // Outputs
     output logic o_ready,        // Stall signal to Rename stage
-    
     output logic rob_alloc,      // Allocate an entry in ROB
     output logic alu_rs_alloc,   // Allocate entry in ALU RS
     output logic branch_rs_alloc,// Allocate entry in Branch RS
     output logic lsu_rs_alloc    // Allocate entry in LSU RS
 );
-
     // 1. Decode Target RS
     logic target_alu, target_branch, target_lsu;
-    
     assign target_alu    = (i_futype == 2'b00);
     assign target_branch = (i_futype == 2'b01);
     assign target_lsu    = (i_futype == 2'b10);
 
     // 2. Stall Logic
-    // Stall if ROB is full OR the specific RS we need is full
+    // Stall if ROB is full OR the specific RS we need is full OR external stall logic triggers
     logic dispatch_stall;
     assign dispatch_stall = rob_full || 
                             (target_alu && alu_rs_full) ||
                             (target_branch && branch_rs_full) ||
-                            (target_lsu && lsu_rs_full);
+                            (target_lsu && lsu_rs_full) ||
+                            (target_branch && i_stall_dispatch); 
 
     // Ready if not stalled
     assign o_ready = !dispatch_stall;

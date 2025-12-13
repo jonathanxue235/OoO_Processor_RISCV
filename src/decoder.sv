@@ -22,7 +22,6 @@ module decoder#(
     output logic    Memwrite,
     output logic    Regwrite
 );
-
     logic [6:0] opcode;
     logic [2:0] funct3;
     logic [6:0] funct7;
@@ -58,7 +57,6 @@ module decoder#(
     localparam ALU_LUI   = 4'b1000;
     localparam ALU_AUIPC = 4'b1001;
 
-    // Main Control Logic
     always_comb begin
         // Defaults
         ALUsrc = 0;
@@ -94,13 +92,13 @@ module decoder#(
                 rs1 = instruction[19:15];
                 rd  = instruction[11:7];
                 case (funct3)
-                    3'b000: ALUOp = ALU_ADD; // ADDI
-                    3'b010: ALUOp = ALU_SLT; // SLTI
-                    3'b100: ALUOp = ALU_XOR; // XORI
-                    3'b110: ALUOp = ALU_OR;  // ORI
-                    3'b111: ALUOp = ALU_AND; // ANDI
-                    3'b001: ALUOp = ALU_SLL; // SLLI
-                    3'b101: ALUOp = ALU_SRL; // SRLI
+                    3'b000: ALUOp = ALU_ADD;
+                    3'b010: ALUOp = ALU_SLT;
+                    3'b100: ALUOp = ALU_XOR;
+                    3'b110: ALUOp = ALU_OR;
+                    3'b111: ALUOp = ALU_AND;
+                    3'b001: ALUOp = ALU_SLL;
+                    3'b101: ALUOp = ALU_SRL;
                     default: ALUOp = ALU_ADD;
                 endcase
             end
@@ -108,8 +106,7 @@ module decoder#(
             // Load
             7'b0000011: begin
                 ALUsrc = 1;
-                // CHANGED: Pass funct3 to LSU via ALUOp
-                ALUOp = {1'b0, funct3}; 
+                ALUOp = {1'b0, funct3};
                 FUtype = 2'b10; // LSU
                 Memread = 1;
                 Regwrite = 1;
@@ -120,8 +117,7 @@ module decoder#(
             // Store
             7'b0100011: begin
                 ALUsrc = 1;
-                // CHANGED: Pass funct3 to LSU via ALUOp
-                ALUOp = {1'b0, funct3}; 
+                ALUOp = {1'b0, funct3};
                 FUtype = 2'b10; // LSU
                 Memwrite = 1;
                 rs1 = instruction[19:15];
@@ -162,6 +158,8 @@ module decoder#(
                 FUtype = 2'b01; 
                 Regwrite = 1;
                 rd = instruction[11:7];
+                // FIX: Force Unconditional Jump Opcode (using unused funct3=010)
+                ALUOp = {1'b0, 3'b010};
             end
 
             // JALR
@@ -172,6 +170,8 @@ module decoder#(
                 Regwrite = 1;
                 rs1 = instruction[19:15];
                 rd  = instruction[11:7];
+                // FIX: Force Unconditional Jump Opcode (using unused funct3=010)
+                ALUOp = {1'b0, 3'b010};
             end
         endcase
     end
