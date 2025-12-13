@@ -20,6 +20,7 @@ module OoO_top #(
   logic skid_to_decode_valid;
   logic [8:0] skid_to_decode_pc;
   T skid_to_decode_instr;
+  
   // ============================================================================
   // SIGNAL DECLARATIONS - DECODE PIPELINE
   // ============================================================================
@@ -53,6 +54,7 @@ module OoO_top #(
   logic skid_to_rename_Memread;
   logic skid_to_rename_Memwrite;
   logic skid_to_rename_Regwrite;
+  
   // ============================================================================
   // SIGNAL DECLARATIONS - RENAME & DISPATCH PIPELINE
   // ============================================================================
@@ -71,6 +73,7 @@ module OoO_top #(
   logic       rename_to_skid_alusrc;
   logic rename_to_skid_memwrite;
   logic rename_to_skid_regwrite;
+  
   // Skid buffer: Rename -> Dispatch
   logic skid_to_rename_ready;
   logic skid_to_dispatch_valid;
@@ -110,6 +113,7 @@ module OoO_top #(
   logic commit_valid;
   logic [6:0] commit_old_preg;
   logic [3:0] commit_tag;
+  
   // ============================================================================
   // SIGNAL DECLARATIONS - EXECUTION UNIT ISSUE & WRITEBACK
   // ============================================================================
@@ -148,10 +152,12 @@ module OoO_top #(
   logic [31:0] lsu_wb_data;
   logic [6:0] lsu_wb_dest;
   logic [3:0] lsu_cdb_tag;
+  
   // Common Data Bus (CDB)
   logic cdb_valid;
   logic [3:0] cdb_tag;
   logic [6:0] cdb_prd;
+  
   // ============================================================================
   // PHYSICAL REGISTER BUSY TRACKING
   // ============================================================================
@@ -193,7 +199,7 @@ module OoO_top #(
 
   pipe_skid_buffer #(.DWIDTH(41)) skid_buffer_fetch_decode (
     .clk(clk),
-    .reset(rst),
+    .reset(rst || branch_mispredict), // Flush frontend on mispredict
     .i_data({fetch_to_skid_instr, fetch_to_skid_pc}),
     .i_valid(fetch_to_skid_valid),
     .o_ready(skid_to_fetch_ready),
@@ -201,7 +207,7 @@ module OoO_top #(
     .o_valid(skid_to_decode_valid),
     .i_ready(decode_to_skid_ready)
   );
-
+  
   // ============================================================================
   // MODULE INSTANTIATIONS - DECODE STAGE
   // ============================================================================
@@ -226,10 +232,10 @@ module OoO_top #(
     .Memwrite(decode_to_skid_Memwrite),
     .Regwrite(decode_to_skid_Regwrite)
   );
-
+  
   pipe_skid_buffer #(.DWIDTH(67)) skid_buffer_decode_rename (
     .clk(clk),
-    .reset(rst),
+    .reset(rst || branch_mispredict), // Flush
     .i_data({decode_to_skid_pc, decode_to_skid_rs1, decode_to_skid_rs2, decode_to_skid_rd,
              decode_to_skid_ALUsrc, decode_to_skid_Branch, decode_to_skid_immediate, decode_to_skid_ALUOp,
              decode_to_skid_FUtype, decode_to_skid_Memread, decode_to_skid_Memwrite, decode_to_skid_Regwrite}),
@@ -278,7 +284,7 @@ module OoO_top #(
 
   pipe_skid_buffer #(.DWIDTH(83)) skid_buffer_rename_dispatch (
     .clk(clk),
-    .reset(rst),
+    .reset(rst || branch_mispredict), // Flush
     .i_data({rename_to_skid_pc, rename_to_skid_prs1, rename_to_skid_prs2, rename_to_skid_prd,
              rename_to_skid_old_prd, rename_to_skid_rob_tag, rename_to_skid_futype, rename_to_skid_alu_op,
              rename_to_skid_immediate, rename_to_skid_branch, rename_to_skid_alusrc,
@@ -349,19 +355,19 @@ module OoO_top #(
       .o_commit_valid(commit_valid), 
       .o_commit_old_preg(commit_old_preg),
       .o_commit_tag(commit_tag), 
-      .branch_mispredict(branch_mispredict)
+      .branch_mispredict(branch_mispredict),
+      .i_mispredict_tag(branch_cdb_tag) 
   );
-
+  
   // ============================================================================
   // CDB CONTENTION BACKPRESSURE
   // ============================================================================
   logic lsu_stall;
   logic lsu_ready_to_rs;
   logic alu_rs_enable;
-
   assign lsu_stall = branch_wb_valid;
   assign alu_rs_enable = !(branch_wb_valid || lsu_wb_valid);
-
+  
   // ============================================================================
   // RESERVATION STATIONS
   // ============================================================================
@@ -395,7 +401,9 @@ module OoO_top #(
       .o_issue_pc(alu_issue_pc),
       .o_issue_alusrc(alu_issue_alusrc), 
       .o_issue_memwrite(), 
-      .branch_mispredict(branch_mispredict)
+      .branch_mispredict(branch_mispredict),
+      .i_mispredict_tag(branch_cdb_tag),
+      .i_rob_head(commit_tag)
   );
 
   reservation_station #(.PREG_WIDTH(7), .ROB_WIDTH(4), .RS_SIZE(8)) rs_branch_inst (
@@ -426,7 +434,9 @@ module OoO_top #(
       .o_issue_alu_op(branch_issue_op), 
       .o_issue_pc(branch_issue_pc),
       .o_issue_memwrite(), 
-      .branch_mispredict(branch_mispredict)
+      .branch_mispredict(branch_mispredict),
+      .i_mispredict_tag(branch_cdb_tag), 
+      .i_rob_head(commit_tag)            
   );
 
   reservation_station #(.PREG_WIDTH(7), .ROB_WIDTH(4), .RS_SIZE(8)) rs_lsu_inst (
@@ -457,7 +467,9 @@ module OoO_top #(
       .o_issue_alu_op(lsu_issue_op), 
       .o_issue_pc(lsu_issue_pc),
       .o_issue_memwrite(lsu_issue_memwrite), 
-      .branch_mispredict(branch_mispredict)
+      .branch_mispredict(branch_mispredict),
+      .i_mispredict_tag(branch_cdb_tag),
+      .i_rob_head(commit_tag)
   );
 
   // ============================================================================
@@ -527,7 +539,7 @@ module OoO_top #(
       .i_prd(lsu_issue_prd), 
       .i_rob_tag(lsu_issue_rob_tag),
       .i_stall(lsu_stall),
-      .i_alu_op(lsu_issue_op), // CONNECTED NEW INPUT
+      .i_alu_op(lsu_issue_op), 
       .o_ready(lsu_ready_to_rs),
       .o_data(lsu_wb_data), 
       .o_prd(lsu_wb_dest), 
