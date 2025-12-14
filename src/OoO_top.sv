@@ -133,6 +133,8 @@ module OoO_top #(
   logic [31:0] branch_issue_pc;
   logic branch_wb_valid;
   logic [3:0] branch_cdb_tag;
+  logic [31:0] branch_wb_data;
+  logic [6:0] branch_wb_dest;
   logic branch_taken;
   logic [31:0] branch_target_addr;
   logic branch_mispredict;
@@ -318,7 +320,7 @@ module OoO_top #(
       if (branch_wb_valid) begin
           cdb_valid = 1'b1;
           cdb_tag   = branch_cdb_tag;
-          cdb_prd   = 7'b0;
+          cdb_prd   = branch_wb_dest;
       end else if (lsu_wb_valid) begin
           cdb_valid = 1'b1;
           cdb_tag   = lsu_cdb_tag;
@@ -465,26 +467,29 @@ module OoO_top #(
   // ============================================================================
 
   physical_register_file #(.DATA_WIDTH(32), .PREG_WIDTH(7)) prf_inst (
-      .clk(clk), 
+      .clk(clk),
       .reset(rst),
-      .alu_prs1_addr(alu_issue_prs1), 
-      .alu_prs2_addr(alu_issue_prs2), 
-      .alu_prs1_data(alu_op_a), 
-      .alu_prs2_data(alu_op_b),       
-      .br_prs1_addr(branch_issue_prs1), 
+      .alu_prs1_addr(alu_issue_prs1),
+      .alu_prs2_addr(alu_issue_prs2),
+      .alu_prs1_data(alu_op_a),
+      .alu_prs2_data(alu_op_b),
+      .br_prs1_addr(branch_issue_prs1),
       .br_prs2_addr(branch_issue_prs2),
-      .br_prs1_data(br_op_a), 
+      .br_prs1_data(br_op_a),
       .br_prs2_data(br_op_b),
-      .lsu_prs1_addr(lsu_issue_prs1), 
+      .lsu_prs1_addr(lsu_issue_prs1),
       .lsu_prs2_addr(lsu_issue_prs2),
-      .lsu_prs1_data(lsu_op_a), 
-      .lsu_prs2_data(lsu_op_b), 
-      .alu_wb_valid(alu_wb_valid), 
-      .alu_wb_dest(alu_wb_dest), 
-      .alu_wb_data(alu_wb_data),    
-      .lsu_wb_valid(lsu_wb_valid), 
-      .lsu_wb_dest(lsu_wb_dest), 
-      .lsu_wb_data(lsu_wb_data)
+      .lsu_prs1_data(lsu_op_a),
+      .lsu_prs2_data(lsu_op_b),
+      .alu_wb_valid(alu_wb_valid),
+      .alu_wb_dest(alu_wb_dest),
+      .alu_wb_data(alu_wb_data),
+      .lsu_wb_valid(lsu_wb_valid),
+      .lsu_wb_dest(lsu_wb_dest),
+      .lsu_wb_data(lsu_wb_data),
+      .br_wb_valid(branch_wb_valid),
+      .br_wb_dest(branch_wb_dest),
+      .br_wb_data(branch_wb_data)
   );
 
   alu_unit #(.DATA_WIDTH(32), .ROB_WIDTH(4), .PREG_WIDTH(7)) alu_instance (
@@ -502,17 +507,20 @@ module OoO_top #(
       .o_valid(alu_wb_valid)
   );
 
-  branch_unit #(.DATA_WIDTH(32), .ROB_WIDTH(4)) branch_instance (
-      .i_op1(br_op_a), 
-      .i_op2(br_op_b), 
+  branch_unit #(.DATA_WIDTH(32), .ROB_WIDTH(4), .PREG_WIDTH(7)) branch_instance (
+      .i_op1(br_op_a),
+      .i_op2(br_op_b),
       .i_pc(branch_issue_pc),
-      .i_imm(branch_issue_imm), 
-      .i_funct3(branch_issue_op[2:0]),
-      .i_valid(branch_issue_valid), 
+      .i_imm(branch_issue_imm),
+      .i_alu_op(branch_issue_op),
+      .i_valid(branch_issue_valid),
       .i_rob_tag(branch_issue_rob_tag),
-      .o_valid(branch_wb_valid), 
+      .i_prd(branch_issue_prd),
+      .o_valid(branch_wb_valid),
       .o_rob_tag(branch_cdb_tag),
-      .o_taken(branch_taken), 
+      .o_prd(branch_wb_dest),
+      .o_result(branch_wb_data),
+      .o_taken(branch_taken),
       .o_target_addr(branch_target_addr),
       .o_mispredict(branch_mispredict)
   );

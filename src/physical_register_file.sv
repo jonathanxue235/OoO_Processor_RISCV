@@ -41,10 +41,12 @@ module physical_register_file #(
     // LSU Writeback (Loads)
     input logic lsu_wb_valid,
     input logic [PREG_WIDTH-1:0] lsu_wb_dest,
-    input logic [DATA_WIDTH-1:0] lsu_wb_data
-    
-    // Branch units usually don't write back data (unless implementing JAL/JALR link reg)
-    // If your Branch unit calculates PC+4, add a write port for it here.
+    input logic [DATA_WIDTH-1:0] lsu_wb_data,
+
+    // Branch Writeback (JAL/JALR link register)
+    input logic br_wb_valid,
+    input logic [PREG_WIDTH-1:0] br_wb_dest,
+    input logic [DATA_WIDTH-1:0] br_wb_data
 );
 
     localparam NUM_PREGS = 1 << PREG_WIDTH;
@@ -84,6 +86,11 @@ module physical_register_file #(
             // LSU Writeback
             if (lsu_wb_valid && lsu_wb_dest != 0) begin
                 registers[lsu_wb_dest] <= lsu_wb_data;
+            end
+
+            // Branch Writeback (JAL/JALR)
+            if (br_wb_valid && br_wb_dest != 0) begin
+                registers[br_wb_dest] <= br_wb_data;
             end
         end
     end

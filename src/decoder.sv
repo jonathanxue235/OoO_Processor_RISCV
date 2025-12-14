@@ -60,6 +60,10 @@ module decoder#(
     localparam ALU_SRA   = 4'b1010; // NEW: Arithmetic Shift
     localparam ALU_SLTU  = 4'b1011; // NEW: Unsigned Set Less Than
 
+    // Branch Unit Operation Codes
+    localparam BR_JAL    = 4'b1000; // JAL instruction
+    localparam BR_JALR   = 4'b1001; // JALR instruction
+
     // Main Control Logic
     always_comb begin
         // Defaults
@@ -163,7 +167,8 @@ module decoder#(
             7'b1101111: begin
                 ALUsrc = 1;
                 Branch = 1;
-                FUtype = 2'b01; 
+                ALUOp = BR_JAL;
+                FUtype = 2'b01;
                 Regwrite = 1;
                 rd = instruction[11:7];
             end
@@ -172,6 +177,7 @@ module decoder#(
             7'b1100111: begin
                 ALUsrc = 1;
                 Branch = 1;
+                ALUOp = BR_JALR;
                 FUtype = 2'b01;
                 Regwrite = 1;
                 rs1 = instruction[19:15];
