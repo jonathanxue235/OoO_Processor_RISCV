@@ -64,7 +64,7 @@ module lsu_unit #(
     assign byte_offset = memory_addr[1:0];
 
     // ------------------------------------------
-    // 3. Store Buffer & Forwarding Logic
+    // 3. Store Buffer
     // ------------------------------------------
     typedef struct packed {
         logic valid;
@@ -91,53 +91,9 @@ module lsu_unit #(
     // ------------------------------------------
     logic [DATA_WIDTH-1:0] dmem [0:MEM_DEPTH-1];
     logic [DATA_WIDTH-1:0] ram_out_raw; 
-    logic [DATA_WIDTH-1:0] load_data_final; // Data after forwarding check
 
     initial begin
         for(int i=0; i<MEM_DEPTH; i++) dmem[i] = 32'b0;
-    end
-
-    // Forwarding Logic: Check SQ for matching address
-    always_comb begin
-        logic match_found;
-        logic [DATA_WIDTH-1:0] forwarded_val;
-        logic [ROB_WIDTH-1:0] age_diff;
-        logic [ROB_WIDTH-1:0] min_age;
-        
-        match_found = 0;
-        forwarded_val = 0;
-        min_age = '1; // Max value
-
-        for (int i=0; i<8; i++) begin
-            if (sq[i].valid && sq[i].addr == memory_addr) begin
-                // Calculate age: How far back is this store from the current load?
-                // We want the youngest store that is older than the load.
-                // Simple assumption: Any valid SQ entry is older than the incoming load 
-                // (assuming in-order dispatch and load executes after store dispatch).
-                // To be precise, we check if the store is OLDER than the load.
-                logic [ROB_WIDTH-1:0] diff;
-                diff = i_rob_tag - sq[i].rob_tag;
-                
-                // If diff is positive (load is younger), this store is a candidate
-                if (diff < (1 << (ROB_WIDTH-1))) begin
-                    // We want the store with the smallest diff (closest predecessor)
-                    if (diff < min_age) begin
-                        min_age = diff;
-                        // Handle byte/half forwarding logic if needed, 
-                        // but for now assuming full word forwarding for simplicity.
-                        forwarded_val = sq[i].data; 
-                        match_found = 1;
-                    end
-                end
-            end
-        end
-
-        // Mux between RAM output and Forwarded value
-        // Note: ram_out_raw is registered in the next block, so we apply forwarding 
-        // to the value that enters the pipeline.
-        // HOWEVER, ram_out_raw comes from synchronous read.
-        // We need to apply forwarding to the *result* of the read.
-        // This is done in the pipeline stage logic below.
     end
 
     always_ff @(posedge clk) begin
@@ -183,14 +139,13 @@ module lsu_unit #(
     end
 
     // ------------------------------------------
-    // 5. Load Pipeline & Forwarding Application
+    // 5. Pipeline Logic (Loads AND Stores)
     // ------------------------------------------
     logic                  stg1_valid;
     logic [PREG_WIDTH-1:0] stg1_prd;
     logic [ROB_WIDTH-1:0]  stg1_rob_tag;
     logic [2:0]            stg1_funct3;
     logic [1:0]            stg1_offset;
-    // We need to carry the address down the pipe to check forwarding in Stage 2
     logic [DATA_WIDTH-1:0] stg1_addr; 
 
     logic                  stg2_valid;
@@ -209,12 +164,17 @@ module lsu_unit #(
             stg2_data_raw <= '0;
         end else begin
             if (!i_stall) begin
-                stg1_valid   <= effective_valid && !i_memwrite;
+                // CHANGED: Allow both Loads and Stores into pipeline to gen ACK
+                // But only if Store buffer wasn't full (accepted)
+                logic accepted;
+                accepted = effective_valid && (!i_memwrite || !sq_full);
+
+                stg1_valid   <= accepted; 
                 stg1_prd     <= i_prd;
                 stg1_rob_tag <= i_rob_tag;
                 stg1_funct3  <= i_alu_op[2:0];
                 stg1_offset  <= byte_offset;
-                stg1_addr    <= memory_addr; // Capture address for forwarding
+                stg1_addr    <= memory_addr;
 
                 stg2_valid    <= stg1_valid;
                 stg2_prd      <= stg1_prd;
@@ -238,44 +198,54 @@ module lsu_unit #(
     end
 
     // ------------------------------------------
-    // 6. Forwarding & Output Formatting
+    // 6. Byte-Granularity Forwarding & Output Formatting
     // ------------------------------------------
     logic [DATA_WIDTH-1:0] final_data_selected;
 
-    // Apply Forwarding Logic based on STAGE 2
     always_comb begin
-        logic match;
-        logic [DATA_WIDTH-1:0] fwd_val;
-        logic [ROB_WIDTH-1:0] min_age;
-        
-        match = 0;
-        fwd_val = stg2_data_raw; // Default to RAM output
-        min_age = '1;
+        final_data_selected = stg2_data_raw; 
 
-        for (int i=0; i<8; i++) begin
-            // Check for valid store to same address
-            if (sq[i].valid && sq[i].addr == stg2_addr) begin
-                // Check if store is OLDER than the load in Stage 2
-                logic [ROB_WIDTH-1:0] diff;
-                diff = stg2_rob_tag - sq[i].rob_tag;
-                
-                if (diff < (1 << (ROB_WIDTH-1))) begin
-                    if (diff < min_age) begin
-                        min_age = diff;
-                        fwd_val = sq[i].data; // Forward the data
-                        match = 1;
+        // Byte-level forwarding logic
+        for (int b = 0; b < 4; b++) begin
+            logic [ROB_WIDTH-1:0] min_age_diff;
+            min_age_diff = '1; 
+            
+            for (int i = 0; i < 8; i++) begin
+                if (sq[i].valid) begin
+                    if (sq[i].addr[31:2] == stg2_addr[31:2]) begin
+                        logic writes_byte;
+                        writes_byte = 0;
+                        case (sq[i].funct3)
+                            3'b000: writes_byte = (sq[i].addr[1:0] == b[1:0]); // SB
+                            3'b001: writes_byte = (sq[i].addr[1] == b[1]);     // SH
+                            default: writes_byte = 1;                          // SW
+                        endcase
+                        
+                        if (writes_byte) begin
+                            logic [ROB_WIDTH-1:0] diff;
+                            diff = stg2_rob_tag - sq[i].rob_tag;
+                            
+                            if (diff != 0 && diff < (1 << (ROB_WIDTH-1))) begin
+                                if (diff < min_age_diff) begin
+                                    min_age_diff = diff;
+                                    case (sq[i].funct3)
+                                        3'b000: final_data_selected[8*b +: 8] = sq[i].data[7:0];
+                                        3'b001: final_data_selected[8*b +: 8] = sq[i].data[8*(b%2) +: 8];
+                                        default: final_data_selected[8*b +: 8] = sq[i].data[8*b +: 8];
+                                    endcase
+                                end
+                            end
+                        end
                     end
                 end
             end
         end
-        final_data_selected = fwd_val;
     end
 
     logic [DATA_WIDTH-1:0] formatted_data;
     always_comb begin
         logic [7:0] b;
         logic [15:0] h;
-        // Use the forwarded data instead of stg2_data_raw directly
         b = final_data_selected[8*stg2_offset +: 8];
         h = final_data_selected[16*stg2_offset[1] +: 16];
         

@@ -50,7 +50,7 @@ module branch_unit #(
         end 
         else if (i_alu_op == ALU_JALR) begin
             o_taken       = 1'b1;
-            o_target_addr = (i_op1 + i_imm) & ~32'd1;
+            o_target_addr = (i_op1 + i_imm) & ~32'd3;
             o_mispredict  = i_valid;
         end
         else begin // Conditional Branch
