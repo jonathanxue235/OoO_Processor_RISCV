@@ -5,7 +5,7 @@ module trace_tb;
     // Signals
     logic clk;
     logic rst;
-    
+
     // DUT Instantiation
     OoO_top #(.T(T)) dut (
         .clk(clk),
@@ -30,7 +30,7 @@ module trace_tb;
         $display("=============================================");
         $display("   OoO RISC-V Processor Testbench Setup");
         $display("=============================================");
-        
+
         // 1. Initialize all instruction memory with NOPs
         $display("[TB] Initializing instruction memory with NOPs...");
         for (i = 0; i < 512; i++) begin 
@@ -97,7 +97,7 @@ module trace_tb;
         logic [6:0] funct7 = instr[31:25];
         logic [31:0] i_imm, s_imm, b_imm, u_imm, j_imm;
         string op_name;
-        
+
         // Immediate Extraction
         i_imm = {{20{instr[31]}}, instr[31:20]};
         s_imm = {{20{instr[31]}}, instr[31:25], instr[11:7]};
@@ -173,7 +173,7 @@ module trace_tb;
             7'b0010111: return $sformatf("AUIPC %s, 0x%h", get_reg_name(rd), u_imm[31:12]);
             7'b1101111: return $sformatf("JAL %s, %0d", get_reg_name(rd), $signed(j_imm));
             7'b1100111: return $sformatf("JALR %s, %0d(%s)", get_reg_name(rd), $signed(i_imm), get_reg_name(rs1));
-            7'b0000000: return "BUBBLE"; // Often 0 is valid in memory init
+            7'b0000000: return "BUBBLE";
             32'h00000013: return "NOP";
             default: return "UNKNOWN";
         endcase
@@ -196,15 +196,18 @@ module trace_tb;
         if (log_fd == 0) $display("Error opening log file.");
 
         // Header
-        $fwrite(log_fd, "Time  | Fetch | Fetch Instr               | Decod | Renam | Dispt | ALU   | Br    | LSU   | WB    | Commt |");
+        $fwrite(log_fd, "               Time  | Fetch | Fetch Instr               | Decod | Renam | Dispt | ALU   | Br    | LSU   | WB    | Commt |");
         for (int i = 0; i < 32; i++) begin
-            $fwrite(log_fd, " x%02d     |", i);
+            // CHANGED: Added one space to match data width of 11 chars
+            $fwrite(log_fd, " x%02d      |", i);
         end
         $fwrite(log_fd, "\n");
+
         // Separator
-        $fwrite(log_fd, "------+-------+---------------------------+-------+-------+-------+-------+-------+-------+-------+-------+");
+        $fwrite(log_fd, "---------------------+-------+---------------------------+-------+-------+-------+-------+-------+-------+-------+-------+");
         for (int i = 0; i < 32; i++) begin
-            $fwrite(log_fd, "--------+");
+            // CHANGED: Added two dashes to match data width of 11 chars
+            $fwrite(log_fd, "----------+");
         end
         $fwrite(log_fd, "\n");
     end
@@ -223,7 +226,6 @@ module trace_tb;
             dispatch_pc = dut.skid_to_dispatch_valid ? {23'b0, dut.skid_to_dispatch_pc} : 32'b0;
 
             // --- Decode Fetch Instruction ---
-            // Use the instruction data currently at the output of fetch stage
             if (dut.fetch_to_skid_valid) begin
                 fetch_instr_str = disasm(dut.fetch_to_skid_instr);
             end else begin
@@ -231,14 +233,13 @@ module trace_tb;
             end
 
             // --- Functional Units (Issue) ---
-            alu_pc      = dut.alu_issue_valid        ? dut.alu_issue_pc    : 32'b0;
-            br_pc       = dut.branch_issue_valid     ? dut.branch_issue_pc : 32'b0;
-            lsu_pc      = dut.lsu_issue_valid        ? dut.lsu_issue_pc    : 32'b0; 
+            alu_pc      = dut.alu_issue_valid    ? dut.alu_issue_pc    : 32'b0;
+            br_pc       = dut.branch_issue_valid ? dut.branch_issue_pc : 32'b0;
+            lsu_pc      = dut.lsu_issue_valid    ? dut.lsu_issue_pc    : 32'b0; 
 
             // --- Writeback & Commit ---
-            // Access internal ROB memory to map tags back to PCs
             if (dut.cdb_valid) 
-                wb_pc = dut.rob_inst.rob_mem[dut.cdb_tag].pc; 
+                wb_pc = dut.rob_inst.rob_mem[dut.cdb_tag].pc;
             else 
                 wb_pc = 32'b0;
 
@@ -248,6 +249,7 @@ module trace_tb;
                 commit_pc = 32'b0;
 
             // --- Write to Log ---
+            // Data format for registers is " %8h |" (11 chars)
             $fwrite(log_fd, "%5t |  %03h  | %-25s |  %03h  |  %03h  |  %03h  |  %03h  |  %03h  |  %03h  |  %03h  |  %03h  |",
                 $time,
                 fetch_pc[8:0], fetch_instr_str,   
