@@ -196,6 +196,7 @@ module OoO_top #(
   pipe_skid_buffer #(.DWIDTH(41)) skid_buffer_fetch_decode (
     .clk(clk),
     .reset(rst),
+    .flush(branch_mispredict),
     .i_data({fetch_to_skid_instr, fetch_to_skid_pc}),
     .i_valid(fetch_to_skid_valid),
     .o_ready(skid_to_fetch_ready),
@@ -232,6 +233,7 @@ module OoO_top #(
   pipe_skid_buffer #(.DWIDTH(67)) skid_buffer_decode_rename (
     .clk(clk),
     .reset(rst),
+    .flush(branch_mispredict),
     .i_data({decode_to_skid_pc, decode_to_skid_rs1, decode_to_skid_rs2, decode_to_skid_rd,
              decode_to_skid_ALUsrc, decode_to_skid_Branch, decode_to_skid_immediate, decode_to_skid_ALUOp,
              decode_to_skid_FUtype, decode_to_skid_Memread, decode_to_skid_Memwrite, decode_to_skid_Regwrite}),
@@ -239,7 +241,7 @@ module OoO_top #(
     .o_data({skid_to_rename_pc, skid_to_rename_rs1, skid_to_rename_rs2, skid_to_rename_rd,
              skid_to_rename_ALUsrc, skid_to_rename_Branch, skid_to_rename_immediate, skid_to_rename_ALUOp,
              skid_to_rename_FUtype, skid_to_rename_Memread, skid_to_rename_Memwrite, skid_to_rename_Regwrite}),
-    .o_valid(skid_to_rename_valid), 
+    .o_valid(skid_to_rename_valid),
     .i_ready(rename_to_skid_ready)
   );
 
@@ -281,6 +283,7 @@ module OoO_top #(
   pipe_skid_buffer #(.DWIDTH(83)) skid_buffer_rename_dispatch (
     .clk(clk),
     .reset(rst),
+    .flush(branch_mispredict),
     .i_data({rename_to_skid_pc, rename_to_skid_prs1, rename_to_skid_prs2, rename_to_skid_prd,
              rename_to_skid_old_prd, rename_to_skid_rob_tag, rename_to_skid_futype, rename_to_skid_alu_op,
              rename_to_skid_immediate, rename_to_skid_branch, rename_to_skid_alusrc,
@@ -337,21 +340,22 @@ module OoO_top #(
   end
 
   rob #(.ROB_WIDTH(4), .PREG_WIDTH(7)) rob_inst (
-      .clk(clk), 
-      .reset(rst), 
-      .i_valid(dispatch_alloc_rob), 
-      .i_tag(skid_to_dispatch_rob_tag), 
+      .clk(clk),
+      .reset(rst),
+      .i_valid(dispatch_alloc_rob),
+      .i_tag(skid_to_dispatch_rob_tag),
       .i_old_prd(skid_to_dispatch_old_prd),
-      .i_is_branch(skid_to_dispatch_branch), 
-      .i_reg_write(skid_to_dispatch_regwrite), 
-      .i_pc({23'b0, skid_to_dispatch_pc}), 
+      .i_is_branch(skid_to_dispatch_branch),
+      .i_reg_write(skid_to_dispatch_regwrite),
+      .i_pc({23'b0, skid_to_dispatch_pc}),
       .o_full(rob_full),
-      .i_cdb_valid(cdb_valid), 
+      .i_cdb_valid(cdb_valid),
       .i_cdb_tag(cdb_tag),
-      .o_commit_valid(commit_valid), 
+      .o_commit_valid(commit_valid),
       .o_commit_old_preg(commit_old_preg),
-      .o_commit_tag(commit_tag), 
-      .branch_mispredict(branch_mispredict)
+      .o_commit_tag(commit_tag),
+      .branch_mispredict(branch_mispredict),
+      .mispredict_rob_tag(branch_cdb_tag)
   );
 
   // ============================================================================
@@ -395,9 +399,10 @@ module OoO_top #(
       .o_issue_imm(alu_issue_imm),
       .o_issue_alu_op(alu_issue_op), 
       .o_issue_pc(alu_issue_pc),
-      .o_issue_alusrc(alu_issue_alusrc), 
-      .o_issue_memwrite(), 
-      .branch_mispredict(branch_mispredict)
+      .o_issue_alusrc(alu_issue_alusrc),
+      .o_issue_memwrite(),
+      .branch_mispredict(branch_mispredict),
+      .mispredict_rob_tag(branch_cdb_tag)
   );
 
   reservation_station #(.PREG_WIDTH(7), .ROB_WIDTH(4), .RS_SIZE(8)) rs_branch_inst (
@@ -425,10 +430,11 @@ module OoO_top #(
       .o_issue_prd(branch_issue_prd),
       .o_issue_rob_tag(branch_issue_rob_tag), 
       .o_issue_imm(branch_issue_imm),
-      .o_issue_alu_op(branch_issue_op), 
+      .o_issue_alu_op(branch_issue_op),
       .o_issue_pc(branch_issue_pc),
-      .o_issue_memwrite(), 
-      .branch_mispredict(branch_mispredict)
+      .o_issue_memwrite(),
+      .branch_mispredict(branch_mispredict),
+      .mispredict_rob_tag(branch_cdb_tag)
   );
 
   reservation_station #(.PREG_WIDTH(7), .ROB_WIDTH(4), .RS_SIZE(8)) rs_lsu_inst (
@@ -456,10 +462,11 @@ module OoO_top #(
       .o_issue_prd(lsu_issue_prd),
       .o_issue_rob_tag(lsu_issue_rob_tag), 
       .o_issue_imm(lsu_issue_imm),
-      .o_issue_alu_op(lsu_issue_op), 
+      .o_issue_alu_op(lsu_issue_op),
       .o_issue_pc(lsu_issue_pc),
-      .o_issue_memwrite(lsu_issue_memwrite), 
-      .branch_mispredict(branch_mispredict)
+      .o_issue_memwrite(lsu_issue_memwrite),
+      .branch_mispredict(branch_mispredict),
+      .mispredict_rob_tag(branch_cdb_tag)
   );
 
   // ============================================================================

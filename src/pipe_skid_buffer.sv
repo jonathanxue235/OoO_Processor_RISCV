@@ -4,12 +4,13 @@ module pipe_skid_buffer #(
 (
    input  logic                clk,             // Clock
    input  logic                reset,           // Active-high synchronous reset
-   
+   input  logic                flush,           // Flush signal (invalidate buffered data)
+
    // Input Interface
    input  logic [DWIDTH-1:0]   i_data,          // Data in
    input  logic                i_valid,         // Data in valid
    output logic                o_ready,         // Ready out
-   
+
    // Output Interface
    output logic [DWIDTH-1:0]   o_data,          // Data out
    output logic                o_valid,         // Data out valid
@@ -26,19 +27,19 @@ logic                valid_rg, ready_rg;    // Valid and Ready signals
 logic                ready;                 // Pipeline ready signal
 
 always @(posedge clk) begin
-   // Reset
-   if (reset) begin
+   // Reset or Flush
+   if (reset || flush) begin
       // Internal Registers
       state_rg     <= PIPE;
       data_rg      <= '0;
       sparebuff_rg <= '0;
       valid_rg     <= 1'b0;
-      ready_rg     <= 1'b0;
+      ready_rg     <= flush ? 1'b1 : 1'b0;  // Ready after flush to accept new data
    end
    // Out of reset
    else begin
       case (state_rg)
-         
+
          /* Stage where data is piped out or stored to spare buffer */
          PIPE: begin
             // Pipe data out
@@ -54,7 +55,7 @@ always @(posedge clk) begin
                state_rg     <= SKID;
             end
          end
-         
+
          /* Stage to wait after data skid happened */
          SKID: begin
             // Copy data from spare buffer to data buffer when downstream is ready, resume pipeline

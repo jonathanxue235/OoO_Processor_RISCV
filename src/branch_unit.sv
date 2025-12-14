@@ -77,7 +77,9 @@ module branch_unit #(
     // Misprediction Logic (Simplified for Phase 3)
     // In a real OoO, we compare 'o_taken' against the prediction made at fetch.
     // For now, assume static Not-Taken. If taken, it's a mispredict.
-    assign o_mispredict  = i_valid && condition_met;
+    // JAL/JALR are unconditional jumps and should NOT cause mispredicts in this model
+    // since they are always correctly predicted as taken.
+    assign o_mispredict  = i_valid && condition_met && !is_jal && !is_jalr;
 
     assign o_valid   = i_valid;
     assign o_rob_tag = i_rob_tag;

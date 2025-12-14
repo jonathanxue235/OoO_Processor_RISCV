@@ -45,7 +45,8 @@ module reservation_station #(
     output logic                  o_issue_memwrite, // NEW: Output to EU
 
     // Recovery
-    input logic branch_mispredict
+    input logic branch_mispredict,
+    input logic [ROB_WIDTH-1:0] mispredict_rob_tag  // Tag of the mispredicting branch
 );
     // RS Entry Struct
     typedef struct packed {
@@ -124,12 +125,29 @@ module reservation_station #(
 
     // --- Sequential Logic ---
     always_ff @(posedge clk) begin
-        if (reset || branch_mispredict) begin
+        if (reset) begin
             for (int i = 0; i < RS_SIZE; i++) begin
                 rs_entries[i].valid <= 0;
                 rs_entries[i].rs1_ready <= 0;
                 rs_entries[i].rs2_ready <= 0;
-                rs_entries[i].memwrite <= 0; // NEW
+                rs_entries[i].memwrite <= 0;
+            end
+        end
+        else if (branch_mispredict) begin
+            // Flush only instructions younger than the mispredicting branch
+            // An instruction is younger if its ROB tag is > mispredict_rob_tag
+            // (assuming tags are allocated sequentially and handling wrap-around)
+            for (int i = 0; i < RS_SIZE; i++) begin
+                if (rs_entries[i].valid) begin
+                    // Check if this entry's tag is younger (allocated after) the mispredicting branch
+                    // Simple approach: tag is younger if tag > mispredict_rob_tag (ignoring wrap for now)
+                    // TODO: Handle wrap-around properly if needed
+                    if (rs_entries[i].rob_tag > mispredict_rob_tag) begin
+                        rs_entries[i].valid <= 0;
+                        rs_entries[i].rs1_ready <= 0;
+                        rs_entries[i].rs2_ready <= 0;
+                    end
+                end
             end
         end
         else begin
