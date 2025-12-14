@@ -136,6 +136,7 @@ module OoO_top #(
   logic branch_taken;
   logic [31:0] branch_target_addr;
   logic branch_mispredict;
+  logic [31:0] branch_wb_data; // NEW: For JAL/JALR link address
 
   logic lsu_issue_valid;
   logic [6:0] lsu_issue_prs1, lsu_issue_prs2, lsu_issue_prd;
@@ -178,7 +179,6 @@ module OoO_top #(
     .addra({2'b00, fetch_to_cache_pc[8:2]}),
     .douta(cache_to_fetch_instr)
   );
-
   fetcher #(.T(T)) fetch_inst (
     .clk(clk), .reset(rst), 
     .take_branch(branch_mispredict), 
@@ -190,7 +190,6 @@ module OoO_top #(
     .ready(skid_to_fetch_ready),
     .valid(fetch_to_skid_valid)
   );
-
   pipe_skid_buffer #(.DWIDTH(41)) skid_buffer_fetch_decode (
     .clk(clk),
     .reset(rst),
@@ -201,7 +200,6 @@ module OoO_top #(
     .o_valid(skid_to_decode_valid),
     .i_ready(decode_to_skid_ready)
   );
-
   // ============================================================================
   // MODULE INSTANTIATIONS - DECODE STAGE
   // ============================================================================
@@ -226,7 +224,6 @@ module OoO_top #(
     .Memwrite(decode_to_skid_Memwrite),
     .Regwrite(decode_to_skid_Regwrite)
   );
-
   pipe_skid_buffer #(.DWIDTH(67)) skid_buffer_decode_rename (
     .clk(clk),
     .reset(rst),
@@ -267,7 +264,6 @@ module OoO_top #(
     .commit_old_preg(commit_old_preg), 
     .branch_mispredict(branch_mispredict)
   );
-
   assign rename_to_skid_pc       = skid_to_rename_pc;
   assign rename_to_skid_futype   = skid_to_rename_FUtype;
   assign rename_to_skid_alu_op   = skid_to_rename_ALUOp;
@@ -275,7 +271,6 @@ module OoO_top #(
   assign rename_to_skid_branch   = skid_to_rename_Branch;
   assign rename_to_skid_alusrc   = skid_to_rename_ALUsrc;
   assign rename_to_skid_memwrite = skid_to_rename_Memwrite;
-
   pipe_skid_buffer #(.DWIDTH(83)) skid_buffer_rename_dispatch (
     .clk(clk),
     .reset(rst),
@@ -292,7 +287,6 @@ module OoO_top #(
     .o_valid(skid_to_dispatch_valid),
     .i_ready(dispatch_to_skid_ready)
   );
-
   // ============================================================================
   // MODULE INSTANTIATIONS - DISPATCH & EXECUTION UNITS
   // ============================================================================
@@ -310,7 +304,6 @@ module OoO_top #(
       .branch_rs_alloc(dispatch_alloc_branch),
       .lsu_rs_alloc(dispatch_alloc_lsu)
   );
-
   // ============================================================================
   // COMMON DATA BUS (CDB) PRIORITY ARBITRATION
   // ============================================================================
@@ -318,7 +311,7 @@ module OoO_top #(
       if (branch_wb_valid) begin
           cdb_valid = 1'b1;
           cdb_tag   = branch_cdb_tag;
-          cdb_prd   = 7'b0;
+          cdb_prd   = branch_issue_prd; 
       end else if (lsu_wb_valid) begin
           cdb_valid = 1'b1;
           cdb_tag   = lsu_cdb_tag;
@@ -351,17 +344,14 @@ module OoO_top #(
       .o_commit_tag(commit_tag), 
       .branch_mispredict(branch_mispredict)
   );
-
   // ============================================================================
   // CDB CONTENTION BACKPRESSURE
   // ============================================================================
   logic lsu_stall;
   logic lsu_ready_to_rs;
   logic alu_rs_enable;
-
   assign lsu_stall = branch_wb_valid;
   assign alu_rs_enable = !(branch_wb_valid || lsu_wb_valid);
-
   // ============================================================================
   // RESERVATION STATIONS
   // ============================================================================
@@ -395,9 +385,9 @@ module OoO_top #(
       .o_issue_pc(alu_issue_pc),
       .o_issue_alusrc(alu_issue_alusrc), 
       .o_issue_memwrite(), 
-      .branch_mispredict(branch_mispredict)
+      .branch_mispredict(branch_mispredict),
+      .branch_rob_tag(branch_cdb_tag)
   );
-
   reservation_station #(.PREG_WIDTH(7), .ROB_WIDTH(4), .RS_SIZE(8)) rs_branch_inst (
       .clk(clk), 
       .reset(rst),
@@ -409,7 +399,7 @@ module OoO_top #(
       .i_rob_tag(skid_to_dispatch_rob_tag), 
       .i_imm(skid_to_dispatch_immediate),
       .i_alu_op(skid_to_dispatch_alu_op), 
-      .i_alusrc(1'b0),
+      .i_alusrc(skid_to_dispatch_alusrc),
       .i_memwrite(1'b0), 
       .i_cdb_valid(cdb_valid), 
       .i_cdb_prd(cdb_prd),
@@ -426,9 +416,9 @@ module OoO_top #(
       .o_issue_alu_op(branch_issue_op), 
       .o_issue_pc(branch_issue_pc),
       .o_issue_memwrite(), 
-      .branch_mispredict(branch_mispredict)
+      .branch_mispredict(branch_mispredict),
+      .branch_rob_tag(branch_cdb_tag)
   );
-
   reservation_station #(.PREG_WIDTH(7), .ROB_WIDTH(4), .RS_SIZE(8)) rs_lsu_inst (
       .clk(clk), 
       .reset(rst),
@@ -457,9 +447,9 @@ module OoO_top #(
       .o_issue_alu_op(lsu_issue_op), 
       .o_issue_pc(lsu_issue_pc),
       .o_issue_memwrite(lsu_issue_memwrite), 
-      .branch_mispredict(branch_mispredict)
+      .branch_mispredict(branch_mispredict),
+      .branch_rob_tag(branch_cdb_tag)
   );
-
   // ============================================================================
   // PHYSICAL REGISTER FILE & EXECUTION UNITS
   // ============================================================================
@@ -484,9 +474,11 @@ module OoO_top #(
       .alu_wb_data(alu_wb_data),    
       .lsu_wb_valid(lsu_wb_valid), 
       .lsu_wb_dest(lsu_wb_dest), 
-      .lsu_wb_data(lsu_wb_data)
+      .lsu_wb_data(lsu_wb_data),
+      .br_wb_valid(branch_wb_valid),
+      .br_wb_dest(branch_issue_prd),
+      .br_wb_data(branch_wb_data)
   );
-
   alu_unit #(.DATA_WIDTH(32), .ROB_WIDTH(4), .PREG_WIDTH(7)) alu_instance (
       .i_op1(alu_op_a), 
       .i_op2(alu_issue_alusrc ? alu_issue_imm : alu_op_b),
@@ -501,22 +493,21 @@ module OoO_top #(
       .o_rob_tag(alu_cdb_tag), 
       .o_valid(alu_wb_valid)
   );
-
   branch_unit #(.DATA_WIDTH(32), .ROB_WIDTH(4)) branch_instance (
       .i_op1(br_op_a), 
       .i_op2(br_op_b), 
       .i_pc(branch_issue_pc),
       .i_imm(branch_issue_imm), 
-      .i_funct3(branch_issue_op[2:0]),
+      .i_alu_op(branch_issue_op),
       .i_valid(branch_issue_valid), 
       .i_rob_tag(branch_issue_rob_tag),
       .o_valid(branch_wb_valid), 
       .o_rob_tag(branch_cdb_tag),
       .o_taken(branch_taken), 
       .o_target_addr(branch_target_addr),
-      .o_mispredict(branch_mispredict)
+      .o_mispredict(branch_mispredict),
+      .o_result(branch_wb_data)
   );
-
   lsu_unit #(.DATA_WIDTH(32), .ROB_WIDTH(4), .PREG_WIDTH(7)) lsu_instance (
       .clk(clk), .reset(rst),
       .i_base_addr(lsu_op_a), 
@@ -527,12 +518,16 @@ module OoO_top #(
       .i_prd(lsu_issue_prd), 
       .i_rob_tag(lsu_issue_rob_tag),
       .i_stall(lsu_stall),
-      .i_alu_op(lsu_issue_op), // CONNECTED NEW INPUT
+      .i_alu_op(lsu_issue_op), 
       .o_ready(lsu_ready_to_rs),
       .o_data(lsu_wb_data), 
       .o_prd(lsu_wb_dest), 
       .o_rob_tag(lsu_cdb_tag), 
-      .o_valid(lsu_wb_valid)
+      .o_valid(lsu_wb_valid),
+      .branch_mispredict(branch_mispredict),
+      .branch_rob_tag(branch_cdb_tag),
+      .commit_valid(commit_valid), // NEW
+      .commit_tag(commit_tag)      // NEW
   );
 
 endmodule

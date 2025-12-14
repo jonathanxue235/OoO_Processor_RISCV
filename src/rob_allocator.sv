@@ -1,19 +1,15 @@
 `timescale 1ns / 1ps
 
 module rob_allocator #(
-    parameter ROB_WIDTH = 5 // 32 ROB Entries
+    parameter ROB_WIDTH = 5 
 ) (
     input logic clk,
     input logic reset,
-
-    input logic alloc_req,       // Request a new tag
-    output logic [ROB_WIDTH-1:0] rob_tag, // The assigned tag
-    
-    // Branch / Recovery
+    input logic alloc_req,       
+    output logic [ROB_WIDTH-1:0] rob_tag, 
     input logic is_branch_dispatch,
     input logic branch_mispredict
 );
-
     logic [ROB_WIDTH-1:0] counter;
     logic [ROB_WIDTH-1:0] counter_shadow;
 
@@ -26,8 +22,8 @@ module rob_allocator #(
         end
         else begin
             if (branch_mispredict) begin
-                // Restore counter
-                counter <= counter_shadow;
+                // FLUSH LOGIC FIXED: Restore counter from shadow (checkpoint)
+                counter <= counter_shadow; 
             end
             else begin
                 // Increment if allocated
@@ -37,8 +33,6 @@ module rob_allocator #(
 
                 // Snapshot
                 if (is_branch_dispatch) begin
-                    // If we just allocated a branch, the *next* instruction 
-                    // needs the *next* tag.
                     if (alloc_req)
                         counter_shadow <= counter + 1;
                     else
@@ -47,5 +41,4 @@ module rob_allocator #(
             end
         end
     end
-
 endmodule
