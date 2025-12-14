@@ -31,7 +31,8 @@ module decoder#(
     assign funct7 = instruction[31:25];
 
     assign o_ready = i_ready;
-    assign o_valid = i_valid;
+    // Set valid to 0 for NOP instructions (ADDI x0, x0, 0 = 0x00000013)
+    assign o_valid = i_valid && (instruction != 32'h00000013);
     assign o_pc = i_pc;
 
     // Immediate Generation

@@ -26,15 +26,22 @@ module trace_tb;
         logic [7:0] b0, b1, b2, b3; // Byte buffers
         logic [31:0] instr;
         int i;
-        
+
         $display("=============================================");
         $display("   OoO RISC-V Processor Testbench Setup");
         $display("=============================================");
 
-        // 1. Load Instruction Memory
-        $display("[TB] Loading '25instMem-swr.txt'...");
-        fd = $fopen("25instMem-swr.txt", "r");
-        
+        // 1. Initialize all instruction memory with NOP instructions
+        $display("[TB] Initializing instruction memory with NOPs...");
+        for (i = 0; i < 512; i++) begin // 9-bit address space = 512 locations
+            dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[i] = 32'h00000013; // NOP
+        end
+        $display("[TB] Initialized %0d memory locations with NOP (0x00000013).", i);
+
+        // 2. Load Instruction Memory
+        $display("[TB] Loading '25instMem-jswr.txt'...");
+        fd = $fopen("25instMem-jswr.txt", "r");
+
         if (fd == 0) begin
             $display("[TB] Error: Could not open '25instMem-r.txt'. Make sure the file is in the simulation directory.");
             $finish;
@@ -44,36 +51,36 @@ module trace_tb;
         while (!$feof(fd)) begin
             // Read 4 bytes (lines) to form one 32-bit instruction
             // RISC-V is Little Endian: LSB is at the lowest address
-            status = $fscanf(fd, "%h\n", b0); 
+            status = $fscanf(fd, "%h\n", b0);
             if (status != 1) break; // Stop if EOF hit mid-instruction
             status = $fscanf(fd, "%h\n", b1);
             status = $fscanf(fd, "%h\n", b2);
             status = $fscanf(fd, "%h\n", b3);
-            
+
             // Assemble Word: {Byte3, Byte2, Byte1, Byte0}
             instr = {b3, b2, b1, b0};
-            
+
             // Write to mock memory
             // Note: addra in OoO_top is [8:0], addressing 32-bit words.
             dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[i] = instr;
-            
+
             i++;
         end
         $fclose(fd);
         $display("[TB] Successfully loaded %0d instructions.", i);
 
-        // 2. Reset Sequence
+        // 3. Reset Sequence
         $display("[TB] Applying Reset...");
         rst = 1;
         repeat(10) @(posedge clk);
         rst = 0;
         $display("[TB] Reset Released. Processor Running...");
 
-        // 3. Execution Phase
-        // Run for enough cycles to allow the 25 instructions (and potential loops) to finish
-        repeat(3000) @(posedge clk);
+        // 4. Execution Phase - Wait for PC to wrap back to 000
+        // This indicates the program has completed and wrapped around
+        wait_for_pc_overflow();
 
-        // 4. Report Final Results
+        // 5. Report Final Results
         report_results();
 
         $display("[TB] Simulation Finished.");
@@ -114,6 +121,46 @@ module trace_tb;
     // =========================================================================
     // 3. Helper Tasks & Functions
     // =========================================================================
+
+    // Task to wait for PC to overflow back to 000
+    task wait_for_pc_overflow();
+        logic [8:0] prev_pc;
+        int timeout_cycles;
+        int max_cycles = 10000; // Safety timeout
+
+        $display("[TB] Waiting for PC to become non-zero...");
+        // First, wait for PC to leave 000 (start of execution)
+        timeout_cycles = 0;
+        while (dut.fetch_to_cache_pc == 9'h000 && timeout_cycles < max_cycles) begin
+            @(posedge clk);
+            timeout_cycles++;
+        end
+
+        if (timeout_cycles >= max_cycles) begin
+            $display("[TB] ERROR: Timeout waiting for PC to start execution!");
+            $finish;
+        end
+
+        $display("[TB] PC started execution at 0x%h. Waiting for overflow back to 000...", dut.fetch_to_cache_pc);
+
+        // Now wait for PC to return to 000 (overflow/wrap-around)
+        timeout_cycles = 0;
+        prev_pc = dut.fetch_to_cache_pc;
+        while (timeout_cycles < max_cycles) begin
+            @(posedge clk);
+            if (dut.fetch_to_cache_pc == 9'h000 && prev_pc != 9'h000) begin
+                $display("[TB] PC overflow detected at time %0t! PC wrapped from 0x%h to 0x000", $time, prev_pc);
+                // Wait a few more cycles for pipeline to drain
+                repeat(50) @(posedge clk);
+                return;
+            end
+            prev_pc = dut.fetch_to_cache_pc;
+            timeout_cycles++;
+        end
+
+        $display("[TB] ERROR: Timeout waiting for PC overflow! Last PC = 0x%h", dut.fetch_to_cache_pc);
+        $finish;
+    endtask
 
     // Function to retrieve architectural register value from the design
     // It traverses the Map Table to find the physical register, then reads the PRF.
