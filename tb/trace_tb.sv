@@ -39,8 +39,8 @@ module trace_tb;
         $display("[TB] Initialized %0d memory locations with NOP (0x00000013).", i);
 
         // 2. Load Instruction Memory
-        $display("[TB] Loading '25instMem-jswr.txt'...");
-        fd = $fopen("25instMem-jswr.txt", "r");
+        $display("[TB] Loading '25instMem-test.txt'...");
+        fd = $fopen("25instMem-test.txt", "r");
 
         if (fd == 0) begin
             $display("[TB] Error: Could not open '25instMem-r.txt'. Make sure the file is in the simulation directory.");
@@ -96,25 +96,41 @@ module trace_tb;
     initial begin
         log_fd = $fopen("processor_state.log", "w");
         if (log_fd == 0) $display("Error opening log file.");
-        
-        $fwrite(log_fd, "Time  | FetchPC | DispValid | ROB_Head | ROB_Count | Commit | CommitTag | x10 (a0) | x11 (a1)\n");
-        $fwrite(log_fd, "------+---------+-----------+----------+-----------+--------+-----------+----------+----------\n");
+
+        // Write header with all 32 registers
+        $fwrite(log_fd, "Time  | FetchPC | DispValid | ROB_Head | ROB_Count | Commit | CommitTag |");
+        for (int i = 0; i < 32; i++) begin
+            $fwrite(log_fd, "   x%-2d   |", i);
+        end
+        $fwrite(log_fd, "\n");
+
+        // Write separator line
+        $fwrite(log_fd, "------+---------+-----------+----------+-----------+--------+-----------+");
+        for (int i = 0; i < 32; i++) begin
+            $fwrite(log_fd, "----------+");
+        end
+        $fwrite(log_fd, "\n");
     end
 
     // Log processor state every cycle
     always @(posedge clk) begin
         if (!rst) begin
-            $fwrite(log_fd, "%5t |   %3h   |     %1b     |    %2d    |     %2d    |   %1b    |    %2d     | %8h | %8h\n",
+            // Write base processor state
+            $fwrite(log_fd, "%5t |   %3h   |     %1b     |    %2d    |     %2d    |   %1b    |    %2d     |",
                 $time,
                 dut.fetch_to_cache_pc,          // Current PC being fetched
                 dut.skid_to_dispatch_valid,     // Dispatch Valid Signal
                 dut.rob_inst.head_ptr,          // ROB Head (Commit Pointer)
                 dut.rob_inst.count,             // Active Instructions in ROB
                 dut.commit_valid,               // Commit Valid Signal
-                dut.commit_tag,                 // Tag of committing instruction
-                get_reg_value(10),              // Value of a0
-                get_reg_value(11)               // Value of a1
+                dut.commit_tag                  // Tag of committing instruction
             );
+
+            // Write all 32 register values
+            for (int i = 0; i < 32; i++) begin
+                $fwrite(log_fd, " %8h |", get_reg_value(i));
+            end
+            $fwrite(log_fd, "\n");
         end
     end
 
@@ -181,16 +197,19 @@ module trace_tb;
 
     // Task to display final results
     task report_results();
-        logic [31:0] val_a0, val_a1;
-        
-        val_a0 = get_reg_value(10); // x10
-        val_a1 = get_reg_value(11); // x11
+        logic [31:0] reg_value;
 
         $display("\n=============================================");
-        $display("FINAL EXECUTION RESULTS");
+        $display("FINAL EXECUTION RESULTS - Register Values");
         $display("=============================================");
-        $display("Register a0 (x10): Hex = 0x%h | Dec = %0d", val_a0, $signed(val_a0));
-        $display("Register a1 (x11): Hex = 0x%h | Dec = %0d", val_a1, $signed(val_a1));
+
+        // Display all 32 registers in a formatted table
+        for (int i = 0; i < 32; i++) begin
+            reg_value = get_reg_value(i);
+            if (i % 4 == 0 && i != 0) $display(""); // Blank line every 4 registers
+            $display("x%-2d: 0x%08h (%0d)", i, reg_value, $signed(reg_value));
+        end
+
         $display("=============================================");
         $display("Log file 'processor_state.log' generated.");
     endtask
