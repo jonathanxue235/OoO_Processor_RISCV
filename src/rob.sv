@@ -6,18 +6,27 @@ module rob #(
 ) (
     input logic clk,
     input logic reset,
-    input logic i_valid,                 
-    input logic [ROB_WIDTH-1:0] i_tag,   
-    input logic [PREG_WIDTH-1:0] i_old_prd, 
-    input logic i_is_branch,       
-    input logic i_reg_write,             
-    input logic [31:0] i_pc,             
+
+    // Allocation
+    input logic i_valid,                 // From Dispatch (rob_alloc)
+    input logic [ROB_WIDTH-1:0] i_tag,   // Direct from Rename
+    input logic [PREG_WIDTH-1:0] i_old_prd, // Direct from Rename
+    input logic i_is_branch,             // Direct from Rename (FUtype or Branch flag)
+    input logic i_reg_write,             // NEW: From Rename/Dispatch
+    input logic [31:0] i_pc,             // Direct from Rename
+    
     output logic o_full,
+
+    // Writeback (Placeholder for CDB)
     input logic i_cdb_valid,
     input logic [ROB_WIDTH-1:0] i_cdb_tag,
+
+    // Commit (To Rename/Arch State)
     output logic o_commit_valid,
     output logic [PREG_WIDTH-1:0] o_commit_old_preg,
     output logic [ROB_WIDTH-1:0] o_commit_tag,
+
+    // Recovery
     input logic branch_mispredict
 );
     localparam ROB_SIZE = 1 << ROB_WIDTH;
@@ -26,7 +35,7 @@ module rob #(
         logic valid;
         logic busy;      
         logic is_branch;
-        logic reg_write; 
+        logic reg_write; // NEW: Track if instruction writes to register
         logic [PREG_WIDTH-1:0] old_prd;
         logic [31:0] pc;
     } rob_entry_t;
@@ -34,30 +43,30 @@ module rob #(
     rob_entry_t rob_mem [0:ROB_SIZE-1];
 
     logic [ROB_WIDTH-1:0] head_ptr;
-    logic [ROB_WIDTH-1:0] tail_ptr;         // NEW: Explicit tail pointer
-    logic [ROB_WIDTH-1:0] tail_ptr_shadow;  // NEW: Shadow tail for checkpoints
+    logic [ROB_WIDTH-1:0] head_ptr_shadow;
     logic [ROB_WIDTH:0] count;
 
     assign o_full = (count == ROB_SIZE);
     
     assign o_commit_valid = rob_mem[head_ptr].valid && !rob_mem[head_ptr].busy && (count > 0);
+    
+    // Mask commit_old_preg: Only valid if the committing instruction actually writes a register
     assign o_commit_old_preg = (rob_mem[head_ptr].reg_write) ? rob_mem[head_ptr].old_prd : '0;
+    
     assign o_commit_tag      = head_ptr;
 
     always_ff @(posedge clk) begin
         if (reset) begin
             head_ptr <= 0;
-            tail_ptr <= 0;
-            tail_ptr_shadow <= 0;
+            head_ptr_shadow <= 0;
             count <= 0;
             for(int i=0; i<ROB_SIZE; i++) rob_mem[i] <= '0;
         end
         else begin
             if (branch_mispredict) begin
-                // FLUSH LOGIC FIXED: Restore tail from checkpoint
-                tail_ptr <= tail_ptr_shadow;
-                count <= tail_ptr_shadow - head_ptr;
-                // No need to clear 'valid' bits; 'count' logic prevents committing garbage.
+                head_ptr <= head_ptr_shadow;
+                count <= 0; 
+                for(int i=0; i<ROB_SIZE; i++) rob_mem[i].valid <= 0;
             end
             else begin
                 if (i_valid && !o_full) begin
@@ -65,14 +74,9 @@ module rob #(
                     rob_mem[i_tag].busy  <= 1;
                     rob_mem[i_tag].old_prd <= i_old_prd;
                     rob_mem[i_tag].is_branch <= i_is_branch;
-                    rob_mem[i_tag].reg_write <= i_reg_write;
+                    rob_mem[i_tag].reg_write <= i_reg_write; // Store RegWrite
                     rob_mem[i_tag].pc <= i_pc;
                     
-                    // Track tail and snapshot if branch
-                    tail_ptr <= tail_ptr + 1;
-                    if (i_is_branch)
-                        tail_ptr_shadow <= tail_ptr + 1;
-
                     if (!o_commit_valid) count <= count + 1;
                 end
                 
@@ -83,6 +87,9 @@ module rob #(
                 if (o_commit_valid) begin
                     rob_mem[head_ptr].valid <= 0;
                     head_ptr <= head_ptr + 1;
+                    if (rob_mem[head_ptr].is_branch)
+                         head_ptr_shadow <= head_ptr + 1;
+                    
                     if (!i_valid) count <= count - 1;
                 end
             end

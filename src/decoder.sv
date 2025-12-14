@@ -57,10 +57,8 @@ module decoder#(
     localparam ALU_AND   = 4'b0111;
     localparam ALU_LUI   = 4'b1000;
     localparam ALU_AUIPC = 4'b1001;
-    localparam ALU_SRA   = 4'b1010; 
-    localparam ALU_SLTU  = 4'b1011;
-    localparam ALU_JAL   = 4'b1100; // NEW: JAL
-    localparam ALU_JALR  = 4'b1101; // NEW: JALR
+    localparam ALU_SRA   = 4'b1010; // NEW: Arithmetic Shift
+    localparam ALU_SLTU  = 4'b1011; // NEW: Unsigned Set Less Than
 
     // Main Control Logic
     always_comb begin
@@ -82,9 +80,9 @@ module decoder#(
                     3'b000: ALUOp = (funct7 == 7'b0100000) ? ALU_SUB : ALU_ADD;
                     3'b001: ALUOp = ALU_SLL;
                     3'b010: ALUOp = ALU_SLT;
-                    3'b011: ALUOp = ALU_SLTU;
+                    3'b011: ALUOp = ALU_SLTU; // Added SLTU
                     3'b100: ALUOp = ALU_XOR;
-                    3'b101: ALUOp = (funct7[5]) ? ALU_SRA : ALU_SRL;
+                    3'b101: ALUOp = (funct7[5]) ? ALU_SRA : ALU_SRL; // Fixed: Check funct7 for SRA
                     3'b110: ALUOp = ALU_OR;
                     3'b111: ALUOp = ALU_AND;
                     default: ALUOp = ALU_ADD;
@@ -99,14 +97,14 @@ module decoder#(
                 rs1 = instruction[19:15];
                 rd  = instruction[11:7];
                 case (funct3)
-                    3'b000: ALUOp = ALU_ADD;
-                    3'b010: ALUOp = ALU_SLT;
-                    3'b011: ALUOp = ALU_SLTU;
-                    3'b100: ALUOp = ALU_XOR;
-                    3'b110: ALUOp = ALU_OR;
-                    3'b111: ALUOp = ALU_AND;
-                    3'b001: ALUOp = ALU_SLL;
-                    3'b101: ALUOp = (funct7[5]) ? ALU_SRA : ALU_SRL;
+                    3'b000: ALUOp = ALU_ADD; // ADDI
+                    3'b010: ALUOp = ALU_SLT; // SLTI
+                    3'b011: ALUOp = ALU_SLTU; // SLTIU (Added)
+                    3'b100: ALUOp = ALU_XOR; // XORI
+                    3'b110: ALUOp = ALU_OR;  // ORI
+                    3'b111: ALUOp = ALU_AND; // ANDI
+                    3'b001: ALUOp = ALU_SLL; // SLLI
+                    3'b101: ALUOp = (funct7[5]) ? ALU_SRA : ALU_SRL; // SRLI/SRAI (Fixed)
                     default: ALUOp = ALU_ADD;
                 endcase
             end
@@ -114,6 +112,7 @@ module decoder#(
             // Load
             7'b0000011: begin
                 ALUsrc = 1;
+                // CHANGED: Pass funct3 to LSU via ALUOp
                 ALUOp = {1'b0, funct3};
                 FUtype = 2'b10; // LSU
                 Memread = 1;
@@ -125,6 +124,7 @@ module decoder#(
             // Store
             7'b0100011: begin
                 ALUsrc = 1;
+                // CHANGED: Pass funct3 to LSU via ALUOp
                 ALUOp = {1'b0, funct3};
                 FUtype = 2'b10; // LSU
                 Memwrite = 1;
@@ -164,7 +164,6 @@ module decoder#(
                 ALUsrc = 1;
                 Branch = 1;
                 FUtype = 2'b01; 
-                ALUOp  = ALU_JAL; // NEW
                 Regwrite = 1;
                 rd = instruction[11:7];
             end
@@ -174,7 +173,6 @@ module decoder#(
                 ALUsrc = 1;
                 Branch = 1;
                 FUtype = 2'b01;
-                ALUOp  = ALU_JALR; // NEW
                 Regwrite = 1;
                 rs1 = instruction[19:15];
                 rd  = instruction[11:7];
