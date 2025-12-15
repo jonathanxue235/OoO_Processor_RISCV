@@ -61,11 +61,11 @@ module reservation_station #(
         logic [3:0]            alu_op;
         logic [31:0]           pc;
         logic                  alusrc;
-        logic                  memwrite; // NEW: Store MemWrite bit
+        logic                  memwrite;
+        // NEW: Store MemWrite bit
     } rs_entry_t;
 
     rs_entry_t rs_entries [0:RS_SIZE-1];
-
     // --- Allocation (Priority Encoder) ---
     logic [31:0] alloc_idx;
     logic        found_free;
@@ -83,7 +83,6 @@ module reservation_station #(
     end
 
     assign o_full = !found_free;
-
     // --- Issue (Priority Encoder) ---
     logic [31:0] issue_idx;
     logic        found_ready;
@@ -101,7 +100,6 @@ module reservation_station #(
     end
 
     assign o_issue_valid = found_ready;
-
     always_comb begin
         if (found_ready) begin
             o_issue_prs1    = rs_entries[issue_idx].prs1;
@@ -134,20 +132,26 @@ module reservation_station #(
             end
         end
         else if (branch_mispredict) begin
-            // Flush only instructions younger than the mispredicting branch
-            // An instruction is younger if its ROB tag is > mispredict_rob_tag
-            // (assuming tags are allocated sequentially and handling wrap-around)
+            // 1. Flush only instructions younger than the mispredicting branch
             for (int i = 0; i < RS_SIZE; i++) begin
                 if (rs_entries[i].valid) begin
-                    // Check if this entry's tag is younger (allocated after) the mispredicting branch
-                    // Simple approach: tag is younger if tag > mispredict_rob_tag (ignoring wrap for now)
-                    // TODO: Handle wrap-around properly if needed
+                    // Note: This comparison handles simple cases. For full robustness with 
+                    // wrap-around, you should use modular arithmetic or an 'is_younger' function.
                     if (rs_entries[i].rob_tag > mispredict_rob_tag) begin
                         rs_entries[i].valid <= 0;
                         rs_entries[i].rs1_ready <= 0;
                         rs_entries[i].rs2_ready <= 0;
                     end
                 end
+            end
+            
+            // 2. CRITICAL FIX: Clear the issued instruction!
+            // If an instruction issued this cycle (e.g. the branch itself), it must be removed.
+            // The loop above might not catch it if tag == mispredict_rob_tag.
+            if (found_ready && i_eu_ready) begin
+                rs_entries[issue_idx].valid <= 0;
+                rs_entries[issue_idx].rs1_ready <= 0;
+                rs_entries[issue_idx].rs2_ready <= 0;
             end
         end
         else begin
@@ -164,10 +168,8 @@ module reservation_station #(
                 rs_entries[alloc_idx].alusrc    <= i_alusrc;
                 rs_entries[alloc_idx].memwrite  <= i_memwrite; // NEW
                 
-                rs_entries[alloc_idx].rs1_ready <= i_rs1_ready ||
-                                                   (i_cdb_valid && i_cdb_prd == i_prs1 && i_prs1 != 0);
-                rs_entries[alloc_idx].rs2_ready <= i_rs2_ready ||
-                                                   (i_cdb_valid && i_cdb_prd == i_prs2 && i_prs2 != 0);
+                rs_entries[alloc_idx].rs1_ready <= i_rs1_ready || (i_cdb_valid && i_cdb_prd == i_prs1 && i_prs1 != 0);
+                rs_entries[alloc_idx].rs2_ready <= i_rs2_ready || (i_cdb_valid && i_cdb_prd == i_prs2 && i_prs2 != 0);
             end
 
             // 2. WAKEUP
