@@ -440,7 +440,7 @@ module OoO_top #(
   reservation_station #(.PREG_WIDTH(7), .ROB_WIDTH(4), .RS_SIZE(8)) rs_lsu_inst (
       .clk(clk), 
       .reset(rst),
-      .i_valid(dispatch_alloc_lsu), 
+      .i_valid(dispatch_alloc_lsu),
       .i_pc({23'b0, skid_to_dispatch_pc}),
       .i_prs1(skid_to_dispatch_prs1), 
       .i_prs2(skid_to_dispatch_prs2), 
