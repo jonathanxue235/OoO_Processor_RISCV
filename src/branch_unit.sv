@@ -79,7 +79,7 @@ module branch_unit #(
     // For now, assume static Not-Taken. If taken, it's a mispredict.
     // JAL/JALR are unconditional jumps and should NOT cause mispredicts in this model
     // since they are always correctly predicted as taken.
-    assign o_mispredict  = i_valid && condition_met && !is_jal && !is_jalr;
+    assign o_mispredict  = i_valid && condition_met;
 
     assign o_valid   = i_valid;
     assign o_rob_tag = i_rob_tag;
