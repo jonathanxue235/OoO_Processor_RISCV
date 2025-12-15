@@ -39,10 +39,10 @@ module trace_tb;
         $display("[TB] Initialized %0d memory locations.", i);
 
         // 2. Load Instruction Memory from file
-        $display("[TB] Loading '25instMem-test.txt'...");
-        fd = $fopen("25instMem-test.txt", "r");
+        $display("[TB] Loading '25instMem-jswr.txt'...");
+        fd = $fopen("25instMem-jswr.txt", "r");
         if (fd == 0) begin
-            $display("[TB] Error: Could not open '25instMem-test.txt'.");
+            $display("[TB] Error: Could not open '25instMem-jswr.txt'.");
             $finish;
         end
 

@@ -437,7 +437,7 @@ module OoO_top #(
       .mispredict_rob_tag(branch_cdb_tag)
   );
 
-  reservation_station #(.PREG_WIDTH(7), .ROB_WIDTH(4), .RS_SIZE(8)) rs_lsu_inst (
+  reservation_station #(.PREG_WIDTH(7), .ROB_WIDTH(4), .RS_SIZE(8), .STRICT_ORDER(1)) rs_lsu_inst (
       .clk(clk), 
       .reset(rst),
       .i_valid(dispatch_alloc_lsu),
