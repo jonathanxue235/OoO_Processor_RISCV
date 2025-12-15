@@ -8,29 +8,35 @@ module rob #(
     input logic reset,
 
     // Allocation
-    input logic i_valid,                 // From Dispatch (rob_alloc)
-    input logic [ROB_WIDTH-1:0] i_tag,   // Direct from Rename
-    input logic [PREG_WIDTH-1:0] i_old_prd, // Direct from Rename
-    input logic i_is_branch,       
-      // Direct from Rename (FUtype or Branch flag)
-    input logic i_reg_write,             // NEW: From Rename/Dispatch
-    input logic [31:0] i_pc,             // Direct from Rename
-    
+    input logic i_valid,
+    input logic [ROB_WIDTH-1:0] i_tag,
+    input logic [PREG_WIDTH-1:0] i_old_prd,
+    input logic i_is_branch,
+    input logic i_reg_write,
+    input logic [31:0] i_pc,
     output logic o_full,
 
-    // Writeback (Placeholder for CDB)
+    // Writeback (CDB)
     input logic i_cdb_valid,
     input logic [ROB_WIDTH-1:0] i_cdb_tag,
+    // NEW: Branch Info from BU/CDB
+    input logic i_cdb_taken,
+    input logic [31:0] i_cdb_target,
 
-    // Commit (To Rename/Arch State)
-   
+    // Commit
     output logic o_commit_valid,
     output logic [PREG_WIDTH-1:0] o_commit_old_preg,
     output logic [ROB_WIDTH-1:0] o_commit_tag,
+    
+    // NEW: Branch Update Info
+    output logic o_commit_is_branch,
+    output logic o_commit_taken,
+    output logic [31:0] o_commit_target,
+    output logic [31:0] o_commit_pc,
 
     // Recovery
     input logic branch_mispredict,
-    input logic [ROB_WIDTH-1:0] mispredict_rob_tag  // Tag of the mispredicting branch
+    input logic [ROB_WIDTH-1:0] mispredict_rob_tag
 );
     localparam ROB_SIZE = 1 << ROB_WIDTH;
 
@@ -38,26 +44,33 @@ module rob #(
         logic valid;
         logic busy;
         logic is_branch;
-        logic reg_write; // Track if instruction writes to register
+        logic reg_write;
         logic [PREG_WIDTH-1:0] old_prd;
         logic [31:0] pc;
+        // NEW: Store Branch Outcome
+        logic taken;
+        logic [31:0] target;
     } rob_entry_t;
 
     rob_entry_t rob_mem [0:ROB_SIZE-1];
 
     logic [ROB_WIDTH-1:0] head_ptr;
     logic [ROB_WIDTH-1:0] tail_ptr;
-    // Explicitly track tail
     logic [ROB_WIDTH-1:0] tail_ptr_shadow;
-    // Shadow tail for recovery
     logic [ROB_WIDTH:0] count;
 
     assign o_full = (count == ROB_SIZE);
-    assign o_commit_valid = rob_mem[head_ptr].valid && !rob_mem[head_ptr].busy && (count > 0);
-    // Mask commit_old_preg: Only valid if the committing instruction actually writes a register
-    assign o_commit_old_preg = (rob_mem[head_ptr].reg_write) ? rob_mem[head_ptr].old_prd : '0;
     
-    assign o_commit_tag      = head_ptr;
+    // Commit Outputs
+    assign o_commit_valid = rob_mem[head_ptr].valid && !rob_mem[head_ptr].busy && (count > 0);
+    assign o_commit_old_preg = (rob_mem[head_ptr].reg_write) ? rob_mem[head_ptr].old_prd : '0;
+    assign o_commit_tag = head_ptr;
+    
+    // Update Outputs
+    assign o_commit_is_branch = rob_mem[head_ptr].is_branch;
+    assign o_commit_taken = rob_mem[head_ptr].taken;
+    assign o_commit_target = rob_mem[head_ptr].target;
+    assign o_commit_pc = rob_mem[head_ptr].pc;
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -69,44 +82,32 @@ module rob #(
         end
         else begin
             if (branch_mispredict) begin
-                // Flush all instructions younger than the mispredicting branch
-                // Keep the branch and all older instructions intact
                 logic [ROB_WIDTH-1:0] new_tail;
                 logic [ROB_WIDTH:0] new_count;
-                logic [ROB_WIDTH-1:0] next_head; // To track head updates
+                logic [ROB_WIDTH-1:0] next_head;
 
-                // 1. Calculate New Tail (one past the mispredicting branch)
                 new_tail = mispredict_rob_tag + 1;
 
-                // 2. Invalidate all entries between new_tail and current tail
                 for(int i=0; i<ROB_SIZE; i++) begin
                     logic [ROB_WIDTH-1:0] idx;
                     idx = i[ROB_WIDTH-1:0];
-                    // Check if idx is in range [new_tail, tail_ptr) with wrapping
                     if (new_tail <= tail_ptr) begin
-                        // No wrap: invalidate if new_tail <= idx < tail_ptr
-                        if (idx >= new_tail && idx < tail_ptr)
-                            rob_mem[idx].valid <= 0;
+                        if (idx >= new_tail && idx < tail_ptr) rob_mem[idx].valid <= 0;
                     end else begin
-                        // Wrap: invalidate if idx >= new_tail OR idx < tail_ptr
-                        if (idx >= new_tail || idx < tail_ptr)
-                            rob_mem[idx].valid <= 0;
+                        if (idx >= new_tail || idx < tail_ptr) rob_mem[idx].valid <= 0;
                     end
                 end
 
-                // 3. Update tail pointer
                 tail_ptr <= new_tail;
 
-                // 4. FIX: Handle Writeback during recovery
-                // If the mispredicting branch (or any op) finishes this cycle, we MUST clear its busy bit
                 if (i_cdb_valid) begin
                     rob_mem[i_cdb_tag].busy <= 0;
+                    if (rob_mem[i_cdb_tag].is_branch) begin
+                        rob_mem[i_cdb_tag].taken <= i_cdb_taken;
+                        rob_mem[i_cdb_tag].target <= i_cdb_target;
+                    end
                 end
 
-                // 5. FIX: Handle Commit during recovery
-                // If the head is valid and not busy, it must commit/retire now.
-                // Usually the mispredicting branch is at the head when it triggers, 
-                // or will be shortly. We shouldn't stall it.
                 next_head = head_ptr;
                 if (o_commit_valid) begin
                     rob_mem[head_ptr].valid <= 0;
@@ -114,7 +115,6 @@ module rob #(
                     next_head = head_ptr + 1;
                 end
 
-                // 6. Recalculate count based on NEW tail and NEW head
                 if (new_tail >= next_head)
                     new_count = new_tail - next_head;
                 else
@@ -122,43 +122,39 @@ module rob #(
                 count <= new_count;
             end
             else begin
-                // Normal operation
-                logic alloc_this_cycle, commit_this_cycle;
-                alloc_this_cycle = i_valid && !o_full;
-                commit_this_cycle = o_commit_valid;
+                logic alloc_this_cycle = i_valid && !o_full;
+                logic commit_this_cycle = o_commit_valid;
 
-                // Allocation: advance tail
                 if (alloc_this_cycle) begin
                     rob_mem[i_tag].valid <= 1;
-                    rob_mem[i_tag].busy  <= 1;
+                    rob_mem[i_tag].busy <= 1;
                     rob_mem[i_tag].old_prd <= i_old_prd;
                     rob_mem[i_tag].is_branch <= i_is_branch;
                     rob_mem[i_tag].reg_write <= i_reg_write;
                     rob_mem[i_tag].pc <= i_pc;
+                    // Reset outcome fields
+                    rob_mem[i_tag].taken <= 0;
+                    rob_mem[i_tag].target <= 0;
+                    
                     tail_ptr <= i_tag + 1;
-
-                    // Save shadow tail if this is a branch dispatch
-                    if (i_is_branch)
-                        tail_ptr_shadow <= i_tag + 1;
+                    if (i_is_branch) tail_ptr_shadow <= i_tag + 1;
                 end
 
-                // Writeback: mark as ready
                 if (i_cdb_valid) begin
                     rob_mem[i_cdb_tag].busy <= 0;
+                    if (rob_mem[i_cdb_tag].is_branch) begin
+                        rob_mem[i_cdb_tag].taken <= i_cdb_taken;
+                        rob_mem[i_cdb_tag].target <= i_cdb_target;
+                    end
                 end
 
-                // Commit: advance head
                 if (commit_this_cycle) begin
                     rob_mem[head_ptr].valid <= 0;
                     head_ptr <= head_ptr + 1;
                 end
 
-                // Update count
-                if (alloc_this_cycle && !commit_this_cycle)
-                    count <= count + 1;
-                else if (!alloc_this_cycle && commit_this_cycle)
-                    count <= count - 1;
-                // else count stays the same
+                if (alloc_this_cycle && !commit_this_cycle) count <= count + 1;
+                else if (!alloc_this_cycle && commit_this_cycle) count <= count - 1;
             end
         end
     end

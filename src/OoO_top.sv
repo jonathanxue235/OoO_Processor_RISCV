@@ -1,3 +1,5 @@
+`timescale 1ns / 1ps
+
 module OoO_top #(
     parameter type T = logic [31:0]
 )(
@@ -8,23 +10,32 @@ module OoO_top #(
   // SIGNAL DECLARATIONS - FETCH PIPELINE
   // ============================================================================
   T cache_to_fetch_instr;
-  // Fetch stage
-  logic [8:0] fetch_to_cache_pc;
+  logic [8:0] fetch_to_cache_pc; // Only 9 bits used for BRAM address
   logic fetch_to_skid_valid;
   T fetch_to_skid_instr;
-  logic [8:0] fetch_to_skid_pc;
+  T fetch_to_skid_pc; 
+  
+  // NEW: Prediction Signals from Fetch
+  logic fetch_to_skid_pred_taken;
+  T     fetch_to_skid_pred_target;
+
   // Skid buffer: Fetch -> Decode
   logic skid_to_fetch_ready;
   logic skid_to_decode_valid;
-  logic [8:0] skid_to_decode_pc;
+  T skid_to_decode_pc; // 32-bit
   T skid_to_decode_instr;
+  logic skid_to_decode_pred_taken;
+  T     skid_to_decode_pred_target;
 
   // ============================================================================
   // SIGNAL DECLARATIONS - DECODE PIPELINE
   // ============================================================================
   logic decode_to_skid_ready;
   logic decode_to_skid_valid;
-  logic [8:0] decode_to_skid_pc;
+  logic [8:0] decode_to_skid_pc; // NOTE: Decoder still uses 9-bit PC internally/outputs? 
+                                 // To be safe, we route the 32-bit PC around the decoder module 
+                                 // via the skid buffer payload.
+  
   logic [4:0] decode_to_skid_rs1;
   logic [4:0] decode_to_skid_rs2;
   logic [4:0] decode_to_skid_rd;
@@ -52,6 +63,10 @@ module OoO_top #(
   logic skid_to_rename_Memread;
   logic skid_to_rename_Memwrite;
   logic skid_to_rename_Regwrite;
+  
+  // NEW: Prediction info at Rename
+  logic skid_to_rename_pred_taken;
+  T     skid_to_rename_pred_target;
 
   // ============================================================================
   // SIGNAL DECLARATIONS - RENAME & DISPATCH PIPELINE
@@ -88,6 +103,10 @@ module OoO_top #(
   logic skid_to_dispatch_alusrc;
   logic skid_to_dispatch_memwrite;
   logic skid_to_dispatch_regwrite;
+  
+  // NEW: Prediction info at Dispatch
+  logic skid_to_dispatch_pred_taken;
+  T     skid_to_dispatch_pred_target;
 
   // ============================================================================
   // SIGNAL DECLARATIONS - EXECUTION CONTROL & STATUS
@@ -111,6 +130,12 @@ module OoO_top #(
   logic commit_valid;
   logic [6:0] commit_old_preg;
   logic [3:0] commit_tag;
+  
+  // NEW: Commit Signals for Predictor Update
+  logic commit_is_branch;
+  logic commit_taken;
+  T     commit_target;
+  T     commit_pc;
 
   // ============================================================================
   // SIGNAL DECLARATIONS - EXECUTION UNIT ISSUE & WRITEBACK
@@ -140,6 +165,10 @@ module OoO_top #(
   logic branch_taken;
   logic [31:0] branch_target_addr;
   logic branch_mispredict;
+  
+  // NEW: Prediction info at Issue
+  logic branch_issue_pred_taken;
+  T     branch_issue_pred_target;
 
   logic lsu_issue_valid;
   logic [6:0] lsu_issue_prs1, lsu_issue_prs2, lsu_issue_prd;
@@ -188,23 +217,37 @@ module OoO_top #(
   fetcher #(.T(T)) fetch_inst (
     .clk(clk), .reset(rst), 
     .take_branch(branch_mispredict), 
-    .branch_loc(branch_target_addr),    
+    .branch_loc(branch_target_addr), // This is now the CORRECT target calculated by BU
     .instr_from_cache(cache_to_fetch_instr), 
-    .pc_to_cache(fetch_to_cache_pc),    
+    .pc_to_cache(fetch_to_cache_pc), // [8:0]
     .instr_to_decode(fetch_to_skid_instr), 
-    .pc_to_decode(fetch_to_skid_pc[31:0]),
+    .pc_to_decode(fetch_to_skid_pc), // 32-bit
+    .pred_taken_to_decode(fetch_to_skid_pred_taken),
+    .pred_target_to_decode(fetch_to_skid_pred_target),
     .ready(skid_to_fetch_ready),
-    .valid(fetch_to_skid_valid)
+    .valid(fetch_to_skid_valid),
+    
+    // Update Interface
+    .update_en(commit_valid && commit_is_branch),
+    .update_pc(commit_pc),
+    .update_taken(commit_taken),
+    .update_target(commit_target)
   );
 
-  pipe_skid_buffer #(.DWIDTH(41)) skid_buffer_fetch_decode (
+  // Widen buffer: 32(instr) + 32(pc) + 1(pred_taken) + 32(pred_target) = 97 bits
+  // NOTE: Original used 9-bit PC in buffer. We use 32-bit for safety and passing predictor data.
+  // Original width was 41 (32+9).
+  // New width = 32 (instr) + 32 (pc) + 1 (pred_taken) + 32 (pred_target) = 97 bits.
+  // Using skid_to_decode_pc[8:0] for decoder compatibility.
+  
+  pipe_skid_buffer #(.DWIDTH(97)) skid_buffer_fetch_decode (
     .clk(clk),
     .reset(rst),
     .flush(branch_mispredict),
-    .i_data({fetch_to_skid_instr, fetch_to_skid_pc}),
+    .i_data({fetch_to_skid_instr, fetch_to_skid_pc, fetch_to_skid_pred_taken, fetch_to_skid_pred_target}),
     .i_valid(fetch_to_skid_valid),
     .o_ready(skid_to_fetch_ready),
-    .o_data({skid_to_decode_instr, skid_to_decode_pc}),
+    .o_data({skid_to_decode_instr, skid_to_decode_pc, skid_to_decode_pred_taken, skid_to_decode_pred_target}),
     .o_valid(skid_to_decode_valid),
     .i_ready(decode_to_skid_ready)
   );
@@ -215,11 +258,11 @@ module OoO_top #(
 
   decoder #(.T(T)) decode_inst (
     .instruction(skid_to_decode_instr), 
-    .i_pc(skid_to_decode_pc),                       
+    .i_pc(skid_to_decode_pc[8:0]),                       
     .i_valid(skid_to_decode_valid), 
     .i_ready(skid_to_decode_ready),            
     .o_ready(decode_to_skid_ready), 
-    .o_pc(decode_to_skid_pc),           
+    .o_pc(decode_to_skid_pc), // [8:0]
     .o_valid(decode_to_skid_valid), 
     .rs1(decode_to_skid_rs1),  
     .rs2(decode_to_skid_rs2), 
@@ -234,17 +277,25 @@ module OoO_top #(
     .Regwrite(decode_to_skid_Regwrite)
   );
 
-  pipe_skid_buffer #(.DWIDTH(67)) skid_buffer_decode_rename (
+  // Width: Original 67 bits.
+  // Signals: PC(9), rs1(5), rs2(5), rd(5), alusrc(1), branch(1), imm(32), aluop(4), fu(2), mr(1), mw(1), rw(1).
+  // New: + 1(pred_taken) + 32(pred_target) = 67 + 33 = 100 bits.
+  
+  pipe_skid_buffer #(.DWIDTH(100)) skid_buffer_decode_rename (
     .clk(clk),
     .reset(rst),
     .flush(branch_mispredict),
     .i_data({decode_to_skid_pc, decode_to_skid_rs1, decode_to_skid_rs2, decode_to_skid_rd,
              decode_to_skid_ALUsrc, decode_to_skid_Branch, decode_to_skid_immediate, decode_to_skid_ALUOp,
-             decode_to_skid_FUtype, decode_to_skid_Memread, decode_to_skid_Memwrite, decode_to_skid_Regwrite}),
+             decode_to_skid_FUtype, decode_to_skid_Memread, decode_to_skid_Memwrite, decode_to_skid_Regwrite,
+             skid_to_decode_pred_taken, skid_to_decode_pred_target}), // Pass through prediction info
+             
     .i_valid(decode_to_skid_valid), .o_ready(skid_to_decode_ready),
     .o_data({skid_to_rename_pc, skid_to_rename_rs1, skid_to_rename_rs2, skid_to_rename_rd,
              skid_to_rename_ALUsrc, skid_to_rename_Branch, skid_to_rename_immediate, skid_to_rename_ALUOp,
-             skid_to_rename_FUtype, skid_to_rename_Memread, skid_to_rename_Memwrite, skid_to_rename_Regwrite}),
+             skid_to_rename_FUtype, skid_to_rename_Memread, skid_to_rename_Memwrite, skid_to_rename_Regwrite,
+             skid_to_rename_pred_taken, skid_to_rename_pred_target}),
+             
     .o_valid(skid_to_rename_valid),
     .i_ready(rename_to_skid_ready)
   );
@@ -274,7 +325,7 @@ module OoO_top #(
     .commit_en(commit_valid), 
     .commit_old_preg(commit_old_preg), 
     .branch_mispredict(branch_mispredict),
-    .mispredict_tag(branch_cdb_tag) // UPDATED: Pass the mispredicting tag
+    .mispredict_tag(branch_cdb_tag)
   );
 
   assign rename_to_skid_pc       = skid_to_rename_pc;
@@ -285,20 +336,27 @@ module OoO_top #(
   assign rename_to_skid_alusrc   = skid_to_rename_ALUsrc;
   assign rename_to_skid_memwrite = skid_to_rename_Memwrite;
 
-  pipe_skid_buffer #(.DWIDTH(83)) skid_buffer_rename_dispatch (
+  // Width: Original 83 bits.
+  // New: 83 + 33 = 116 bits.
+  
+  pipe_skid_buffer #(.DWIDTH(116)) skid_buffer_rename_dispatch (
     .clk(clk),
     .reset(rst),
     .flush(branch_mispredict),
     .i_data({rename_to_skid_pc, rename_to_skid_prs1, rename_to_skid_prs2, rename_to_skid_prd,
              rename_to_skid_old_prd, rename_to_skid_rob_tag, rename_to_skid_futype, rename_to_skid_alu_op,
              rename_to_skid_immediate, rename_to_skid_branch, rename_to_skid_alusrc,
-             rename_to_skid_memwrite, rename_to_skid_regwrite}),
+             rename_to_skid_memwrite, rename_to_skid_regwrite,
+             skid_to_rename_pred_taken, skid_to_rename_pred_target}), // Pass through prediction info
+             
     .i_valid(rename_to_skid_valid),
     .o_ready(skid_to_rename_ready),
     .o_data({skid_to_dispatch_pc, skid_to_dispatch_prs1, skid_to_dispatch_prs2, skid_to_dispatch_prd,
              skid_to_dispatch_old_prd, skid_to_dispatch_rob_tag, skid_to_dispatch_futype, skid_to_dispatch_alu_op,
              skid_to_dispatch_immediate, skid_to_dispatch_branch, skid_to_dispatch_alusrc,
-             skid_to_dispatch_memwrite, skid_to_dispatch_regwrite}),
+             skid_to_dispatch_memwrite, skid_to_dispatch_regwrite,
+             skid_to_dispatch_pred_taken, skid_to_dispatch_pred_target}),
+             
     .o_valid(skid_to_dispatch_valid),
     .i_ready(dispatch_to_skid_ready)
   );
@@ -356,9 +414,19 @@ module OoO_top #(
       .o_full(rob_full),
       .i_cdb_valid(cdb_valid),
       .i_cdb_tag(cdb_tag),
+      // NEW: CDB Info for Branch Updates
+      .i_cdb_taken(branch_taken),
+      .i_cdb_target(branch_target_addr),
+      
       .o_commit_valid(commit_valid),
       .o_commit_old_preg(commit_old_preg),
       .o_commit_tag(commit_tag),
+      // NEW: Update Info
+      .o_commit_is_branch(commit_is_branch),
+      .o_commit_taken(commit_taken),
+      .o_commit_target(commit_target),
+      .o_commit_pc(commit_pc),
+  
       .branch_mispredict(branch_mispredict),
       .mispredict_rob_tag(branch_cdb_tag)
   );
@@ -369,7 +437,6 @@ module OoO_top #(
   logic lsu_stall;
   logic lsu_ready_to_rs;
   logic alu_rs_enable;
-
   assign lsu_stall = branch_wb_valid;
   assign alu_rs_enable = !(branch_wb_valid || lsu_wb_valid);
 
@@ -391,7 +458,11 @@ module OoO_top #(
       .i_cdb_prd(cdb_prd), 
       .i_alu_op(skid_to_dispatch_alu_op), 
       .i_alusrc(skid_to_dispatch_alusrc), 
-      .i_memwrite(1'b0), 
+      .i_memwrite(1'b0),
+      // Pass 0 for prediction inputs (ALU ops don't care)
+      .i_pred_taken(1'b0),
+      .i_pred_target(32'd0),
+      
       .i_rs1_ready((skid_to_dispatch_prs1 == 0) || phys_reg_busy[skid_to_dispatch_prs1]),
       .i_rs2_ready((skid_to_dispatch_prs2 == 0) || phys_reg_busy[skid_to_dispatch_prs2]),
       .o_full(alu_rs_full),
@@ -406,6 +477,9 @@ module OoO_top #(
       .o_issue_pc(alu_issue_pc),
       .o_issue_alusrc(alu_issue_alusrc),
       .o_issue_memwrite(),
+      .o_issue_pred_taken(),
+      .o_issue_pred_target(),
+      
       .branch_mispredict(branch_mispredict),
       .mispredict_rob_tag(branch_cdb_tag)
   );
@@ -422,7 +496,11 @@ module OoO_top #(
       .i_imm(skid_to_dispatch_immediate),
       .i_alu_op(skid_to_dispatch_alu_op), 
       .i_alusrc(1'b0),
-      .i_memwrite(1'b0), 
+      .i_memwrite(1'b0),
+      // Pass Prediction Info
+      .i_pred_taken(skid_to_dispatch_pred_taken),
+      .i_pred_target(skid_to_dispatch_pred_target),
+      
       .i_cdb_valid(cdb_valid), 
       .i_cdb_prd(cdb_prd),
       .i_rs1_ready((skid_to_dispatch_prs1 == 0) || phys_reg_busy[skid_to_dispatch_prs1]),
@@ -438,6 +516,10 @@ module OoO_top #(
       .o_issue_alu_op(branch_issue_op),
       .o_issue_pc(branch_issue_pc),
       .o_issue_memwrite(),
+      // Extract Prediction Info
+      .o_issue_pred_taken(branch_issue_pred_taken),
+      .o_issue_pred_target(branch_issue_pred_target),
+      
       .branch_mispredict(branch_mispredict),
       .mispredict_rob_tag(branch_cdb_tag)
   );
@@ -454,7 +536,10 @@ module OoO_top #(
       .i_imm(skid_to_dispatch_immediate), 
       .i_alu_op(skid_to_dispatch_alu_op), 
       .i_alusrc(1'b1),
-      .i_memwrite(skid_to_dispatch_memwrite), 
+      .i_memwrite(skid_to_dispatch_memwrite),
+      .i_pred_taken(1'b0),
+      .i_pred_target(32'd0),
+      
       .i_cdb_valid(cdb_valid),
       .i_cdb_prd(cdb_prd),
       .i_rs1_ready((skid_to_dispatch_prs1 == 0) || phys_reg_busy[skid_to_dispatch_prs1]),
@@ -470,6 +555,9 @@ module OoO_top #(
       .o_issue_alu_op(lsu_issue_op),
       .o_issue_pc(lsu_issue_pc),
       .o_issue_memwrite(lsu_issue_memwrite),
+      .o_issue_pred_taken(),
+      .o_issue_pred_target(),
+      
       .branch_mispredict(branch_mispredict),
       .mispredict_rob_tag(branch_cdb_tag)
   );
@@ -528,6 +616,10 @@ module OoO_top #(
       .i_valid(branch_issue_valid),
       .i_rob_tag(branch_issue_rob_tag),
       .i_prd(branch_issue_prd),
+      // NEW Inputs
+      .i_pred_taken(branch_issue_pred_taken),
+      .i_pred_target(branch_issue_pred_target),
+      
       .o_valid(branch_wb_valid),
       .o_rob_tag(branch_cdb_tag),
       .o_prd(branch_wb_dest),
