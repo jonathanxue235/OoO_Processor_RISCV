@@ -1,3 +1,5 @@
+`timescale 1ns / 1ps
+
 module trace_tb;
 
     parameter type T = logic [31:0];
@@ -26,6 +28,7 @@ module trace_tb;
         logic [7:0] b0, b1, b2, b3; // Byte buffers
         logic [31:0] instr;
         int i;
+        longint start_time, end_time, total_cycles;
 
         $display("=============================================");
         $display("   OoO RISC-V Processor Testbench Setup");
@@ -39,8 +42,8 @@ module trace_tb;
         $display("[TB] Initialized %0d memory locations.", i);
 
         // 2. Load Instruction Memory from file
-        $display("[TB] Loading '25instMem-jswr.txt'...");
-        fd = $fopen("25instMem-jswr.txt", "r");
+        $display("[TB] Loading '25instMem-test.txt'...");
+        fd = $fopen("25instMem-test.txt", "r");
         if (fd == 0) begin
             $display("[TB] Error: Could not open '25instMem-jswr.txt'.");
             $finish;
@@ -53,6 +56,7 @@ module trace_tb;
             status = $fscanf(fd, "%h\n", b1);
             status = $fscanf(fd, "%h\n", b2);
             status = $fscanf(fd, "%h\n", b3);
+            
             instr = {b3, b2, b1, b0};
             dut.instruction_memory.inst.native_mem_module.blk_mem_gen_v8_4_11_inst.memory[i] = instr;
             i++;
@@ -66,12 +70,26 @@ module trace_tb;
         repeat(10) @(posedge clk);
         rst = 0;
         $display("[TB] Reset Released. Processor Running...");
+        
+        // Record Start Time
+        start_time = $time;
 
         // 4. Execution Phase
-        wait_for_pc_overflow();
+        // Wait for pipeline to drain completely (Optimal Termination)
+        wait_for_completion();
+        
+        // Record End Time
+        end_time = $time;
+        total_cycles = (end_time - start_time) / 10; // 10ns clock period
 
         // 5. Report Final Results
         report_results();
+        
+        $display("\n=============================================");
+        $display("   PERFORMANCE METRICS");
+        $display("=============================================");
+        $display("   Total Execution Cycles: %0d", total_cycles);
+        $display("=============================================");
 
         $display("[TB] Simulation Finished.");
         $fclose(log_fd);
@@ -198,15 +216,12 @@ module trace_tb;
         // Header
         $fwrite(log_fd, "               Time  | Fetch | Fetch Instr               | Decod | Renam | Dispt | ALU   | Br    | LSU   | WB    | Commt |");
         for (int i = 0; i < 32; i++) begin
-            // CHANGED: Added one space to match data width of 11 chars
             $fwrite(log_fd, " x%02d      |", i);
         end
         $fwrite(log_fd, "\n");
-
         // Separator
         $fwrite(log_fd, "---------------------+-------+---------------------------+-------+-------+-------+-------+-------+-------+-------+-------+");
         for (int i = 0; i < 32; i++) begin
-            // CHANGED: Added two dashes to match data width of 11 chars
             $fwrite(log_fd, "----------+");
         end
         $fwrite(log_fd, "\n");
@@ -220,6 +235,7 @@ module trace_tb;
             string fetch_instr_str;
 
             // --- Pipeline Stage PCs ---
+            // If valid is 0, we log 0 to indicate "Empty/Bubble"
             fetch_pc    = dut.fetch_to_skid_valid    ? {23'b0, dut.fetch_to_skid_pc}    : 32'b0;
             decode_pc   = dut.decode_to_skid_valid   ? {23'b0, dut.decode_to_skid_pc}   : 32'b0;
             rename_pc   = dut.rename_to_skid_valid   ? {23'b0, dut.rename_to_skid_pc}   : 32'b0;
@@ -235,21 +251,20 @@ module trace_tb;
             // --- Functional Units (Issue) ---
             alu_pc      = dut.alu_issue_valid    ? dut.alu_issue_pc    : 32'b0;
             br_pc       = dut.branch_issue_valid ? dut.branch_issue_pc : 32'b0;
-            lsu_pc      = dut.lsu_issue_valid    ? dut.lsu_issue_pc    : 32'b0; 
-
+            lsu_pc      = dut.lsu_issue_valid    ? dut.lsu_issue_pc    : 32'b0;
+            
             // --- Writeback & Commit ---
             if (dut.cdb_valid) 
                 wb_pc = dut.rob_inst.rob_mem[dut.cdb_tag].pc;
             else 
                 wb_pc = 32'b0;
-
+            
             if (dut.commit_valid) 
                 commit_pc = dut.rob_inst.rob_mem[dut.commit_tag].pc;
             else 
                 commit_pc = 32'b0;
 
             // --- Write to Log ---
-            // Data format for registers is " %8h |" (11 chars)
             $fwrite(log_fd, "%5t |  %03h  | %-25s |  %03h  |  %03h  |  %03h  |  %03h  |  %03h  |  %03h  |  %03h  |  %03h  |",
                 $time,
                 fetch_pc[8:0], fetch_instr_str,   
@@ -262,7 +277,7 @@ module trace_tb;
                 wb_pc[8:0],       
                 commit_pc[8:0]    
             );
-
+            
             // Write Register Values
             for (int i = 0; i < 32; i++) begin
                 $fwrite(log_fd, " %8h |", get_reg_value(i));
@@ -272,39 +287,41 @@ module trace_tb;
     end
 
     // =========================================================================
-    // 4. Tasks (Overflow Wait & Reporting)
+    // 4. Tasks (Completion Wait & Reporting)
     // =========================================================================
     
-    task wait_for_pc_overflow();
-        logic [8:0] prev_pc;
+    // Optimal Termination Logic
+    task wait_for_completion();
         int timeout_cycles = 0;
-        int max_cycles = 10000;
+        int max_cycles = 100000;
 
-        $display("[TB] Waiting for PC to become non-zero...");
-        while (dut.fetch_to_cache_pc == 9'h000 && timeout_cycles < max_cycles) begin
-            @(posedge clk);
-            timeout_cycles++;
-        end
+        $display("[TB] Waiting for program completion (All pipeline stages invalid + Fetching NOP + ROB Empty)...");
 
-        if (timeout_cycles >= max_cycles) begin
-            $display("[TB] ERROR: Timeout waiting for start!");
-            $finish;
-        end
-
-        $display("[TB] Started at 0x%h. Waiting for overflow back to 000...", dut.fetch_to_cache_pc);
-        prev_pc = dut.fetch_to_cache_pc;
-        timeout_cycles = 0;
         while (timeout_cycles < max_cycles) begin
             @(posedge clk);
-            if (dut.fetch_to_cache_pc == 9'h000 && prev_pc != 9'h000) begin
-                $display("[TB] PC overflow detected at %0t.", $time);
-                repeat(50) @(posedge clk);
+            
+            // TERMINATION CONDITION:
+            // 1. Fetcher is seeing NOPs (0x00000013)
+            // 2. Decode Stage is Invalid (valid=0 implies PC=0 in logs)
+            // 3. Rename Stage is Invalid
+            // 4. Dispatch Stage is Invalid
+            // 5. ROB Count is 0 (Crucial! Ensures backend is completely drained)
+            if (dut.fetch_to_skid_instr == 32'h00000013 && 
+                dut.decode_to_skid_valid == 1'b0 && 
+                dut.rename_to_skid_valid == 1'b0 &&
+                dut.skid_to_dispatch_valid == 1'b0 &&
+                dut.rob_inst.count == 0) begin
+                
+                $display("[TB] Pipeline Drained. Program Completed at %0t.", $time);
+                // Allow a few extra cycles for final signals to settle (waveforms)
+                repeat(10) @(posedge clk);
                 return;
             end
-            prev_pc = dut.fetch_to_cache_pc;
+            
             timeout_cycles++;
         end
-        $display("[TB] ERROR: Timeout waiting for overflow!");
+
+        $display("[TB] ERROR: Timeout waiting for completion!");
         $finish;
     endtask
 
