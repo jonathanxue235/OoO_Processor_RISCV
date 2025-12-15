@@ -1,7 +1,8 @@
 `timescale 1ns / 1ps
 
 module free_list #(
-    parameter PREG_WIDTH = 7 // 128 Registers
+    parameter PREG_WIDTH = 7, // 128 Registers
+    parameter ROB_WIDTH  = 4  // NEW: Needed for snapshot indexing
 ) (
     input logic clk,
     input logic reset,
@@ -17,28 +18,30 @@ module free_list #(
 
     // Branch / Recovery Interface
     input logic is_branch_dispatch, // Snapshot Head Pointer
-    input logic branch_mispredict   // Restore Head Pointer
+    input logic [ROB_WIDTH-1:0] dispatch_tag, // NEW: Tag of the dispatching branch
+    
+    input logic branch_mispredict,   // Restore Head Pointer
+    input logic [ROB_WIDTH-1:0] recovery_tag // NEW: Tag of the mispredicting branch
 );
-
-    localparam NUM_PREGS = 1 << PREG_WIDTH; // 64
-    localparam NUM_AREGS = 32;              // 32 Architectural Regs
+    localparam NUM_PREGS = 1 << PREG_WIDTH; // 128
+    localparam NUM_AREGS = 32;
+    // 32 Architectural Regs
+    localparam NUM_SNAPSHOTS = 1 << ROB_WIDTH;
 
     // The Free List Queue
-    // We only need to store (NUM_PREGS - NUM_AREGS) entries roughly, 
-    // but sizing to NUM_PREGS is safe.
     logic [PREG_WIDTH-1:0] free_list_queue [0:NUM_PREGS-1];
 
     // Pointers
-    logic [PREG_WIDTH:0] head_ptr; // Allocation Pointer (extra bit for wrap detection)
+    logic [PREG_WIDTH:0] head_ptr; // Allocation Pointer
     logic [PREG_WIDTH:0] tail_ptr; // Commit/Free Pointer
     
-    // Shadow Pointer for Recovery
-    logic [PREG_WIDTH:0] head_ptr_shadow;
-    
+    // Shadow Pointer Array for Recovery
+    logic [PREG_WIDTH:0] head_ptr_snapshots [0:NUM_SNAPSHOTS-1]; // NEW: Array
+
     // Count of free registers
     logic [PREG_WIDTH:0] count;
     assign count = tail_ptr - head_ptr;
-    
+
     // Are we empty?
     assign alloc_valid = (count != 0);
 
@@ -49,31 +52,22 @@ module free_list #(
         if (reset) begin
             head_ptr <= '0;
             tail_ptr <= '0;
-            head_ptr_shadow <= '0;
             
             // Initialize Free List
-            // We cannot put P0-P31 in free list initially because they are mapped to x0-x31
-            // So we fill free list with P32, P33, ... P63
             for (int i = 0; i < NUM_PREGS; i++) begin
-                if (i < (NUM_PREGS - NUM_AREGS)) begin
-                    // FIX: Removed [PREG_WIDTH-1:0] slicing on expression
-                    // Implicit truncation handles the width automatically.
+                if (i < (NUM_PREGS - NUM_AREGS)) 
                     free_list_queue[i] <= i + NUM_AREGS;
-                end else begin
+                else 
                     free_list_queue[i] <= '0;
-                end
             end
             
-            // Set Tail to cover the initialized range (32 entries)
-            tail_ptr <= (NUM_PREGS - NUM_AREGS); 
+            tail_ptr <= (NUM_PREGS - NUM_AREGS);
         end
         else begin
             if (branch_mispredict) begin
                 // RECOVERY:
-                // We reset the allocation pointer back to where it was at the branch.
-                // Any registers allocated *after* the branch are implicitly "freed" 
-                // because the head pointer moves back, making them valid for allocation again.
-                head_ptr <= head_ptr_shadow;
+                // Restore head ptr from the specific snapshot corresponding to the mispredicted branch
+                head_ptr <= head_ptr_snapshots[recovery_tag];
             end
             else begin
                 // 1. Allocation (Move Head)
@@ -82,8 +76,6 @@ module free_list #(
                 end
 
                 // 2. Commit / Freeing (Move Tail)
-                // When an instruction commits, it frees the *old* physical register 
-                // that was previously mapped to its destination.
                 if (commit_en && commit_old_preg != 0) begin // Never free P0
                     free_list_queue[tail_ptr[PREG_WIDTH-1:0]] <= commit_old_preg;
                     tail_ptr <= tail_ptr + 1;
@@ -92,10 +84,11 @@ module free_list #(
                 // 3. Snapshot for Branch
                 if (is_branch_dispatch) begin
                     // Save the state of the Head pointer *after* potential allocation
+                    // into the slot corresponding to the current branch's ROB tag
                     if (alloc_req && alloc_valid)
-                        head_ptr_shadow <= head_ptr + 1;
+                        head_ptr_snapshots[dispatch_tag] <= head_ptr + 1;
                     else
-                        head_ptr_shadow <= head_ptr;
+                        head_ptr_snapshots[dispatch_tag] <= head_ptr;
                 end
             end
         end

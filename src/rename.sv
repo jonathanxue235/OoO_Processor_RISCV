@@ -1,5 +1,3 @@
-`timescale 1ns / 1ps
-
 module rename #(
     parameter AREG_WIDTH = 5,
     parameter PREG_WIDTH = 7,
@@ -45,12 +43,13 @@ module rename #(
     // ------------------------------------
     // Branch Recovery
     // ------------------------------------
-    input logic branch_mispredict
+    input logic branch_mispredict,
+    // NEW: Needed for multiple checkpoint recovery
+    input logic [ROB_WIDTH-1:0] mispredict_tag
 );
     // Internal Signals
     logic free_list_valid;
     logic [PREG_WIDTH-1:0] new_preg;
-
     // We write to a register if the instruction is valid, the decoder says so, AND it's not x0
     logic actual_reg_write;
     assign actual_reg_write = decode_valid && decode_reg_write && (decode_rd != 0);
@@ -69,7 +68,8 @@ module rename #(
     // ------------------------------------
 
     free_list #(
-        .PREG_WIDTH(PREG_WIDTH)
+        .PREG_WIDTH(PREG_WIDTH),
+        .ROB_WIDTH(ROB_WIDTH)
     ) u_free_list (
         .clk(clk),
         .reset(reset),
@@ -80,12 +80,15 @@ module rename #(
         .commit_en(commit_en),
         .commit_old_preg(commit_old_preg),
         .is_branch_dispatch(dispatch_valid && decode_is_branch),
-        .branch_mispredict(branch_mispredict)
+        .dispatch_tag(dispatch_rob_tag), // Pass the ROB tag
+        .branch_mispredict(branch_mispredict),
+        .recovery_tag(mispredict_tag)    // Pass the recovery tag
     );
 
     map_table #(
         .AREG_WIDTH(AREG_WIDTH),
-        .PREG_WIDTH(PREG_WIDTH)
+        .PREG_WIDTH(PREG_WIDTH),
+        .ROB_WIDTH(ROB_WIDTH)
     ) u_map_table (
         .clk(clk),
         .reset(reset),
@@ -95,7 +98,9 @@ module rename #(
         .reg_write(dispatch_valid && actual_reg_write),
         .new_preg(new_preg),
         .is_branch_dispatch(dispatch_valid && decode_is_branch),
+        .dispatch_tag(dispatch_rob_tag), // Pass the ROB tag
         .branch_mispredict(branch_mispredict),
+        .recovery_tag(mispredict_tag),   // Pass the recovery tag
         .prs1(dispatch_prs1),
         .prs2(dispatch_prs2),
         .old_p_dest(dispatch_old_prd)
@@ -109,7 +114,8 @@ module rename #(
         .alloc_req(dispatch_valid), // Allocate tag for every valid instruction
         .rob_tag(dispatch_rob_tag),
         .is_branch_dispatch(dispatch_valid && decode_is_branch),
-        .branch_mispredict(branch_mispredict)
+        .branch_mispredict(branch_mispredict),
+        .recovery_tag(mispredict_tag) // Pass the recovery tag
     );
 
     // ------------------------------------

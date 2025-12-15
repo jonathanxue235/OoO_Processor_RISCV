@@ -1,5 +1,3 @@
-`timescale 1ns / 1ps
-
 module OoO_top #(
     parameter type T = logic [31:0]
 )(
@@ -20,6 +18,7 @@ module OoO_top #(
   logic skid_to_decode_valid;
   logic [8:0] skid_to_decode_pc;
   T skid_to_decode_instr;
+
   // ============================================================================
   // SIGNAL DECLARATIONS - DECODE PIPELINE
   // ============================================================================
@@ -53,6 +52,7 @@ module OoO_top #(
   logic skid_to_rename_Memread;
   logic skid_to_rename_Memwrite;
   logic skid_to_rename_Regwrite;
+
   // ============================================================================
   // SIGNAL DECLARATIONS - RENAME & DISPATCH PIPELINE
   // ============================================================================
@@ -71,6 +71,7 @@ module OoO_top #(
   logic       rename_to_skid_alusrc;
   logic rename_to_skid_memwrite;
   logic rename_to_skid_regwrite;
+
   // Skid buffer: Rename -> Dispatch
   logic skid_to_rename_ready;
   logic skid_to_dispatch_valid;
@@ -110,6 +111,7 @@ module OoO_top #(
   logic commit_valid;
   logic [6:0] commit_old_preg;
   logic [3:0] commit_tag;
+
   // ============================================================================
   // SIGNAL DECLARATIONS - EXECUTION UNIT ISSUE & WRITEBACK
   // ============================================================================
@@ -150,10 +152,12 @@ module OoO_top #(
   logic [31:0] lsu_wb_data;
   logic [6:0] lsu_wb_dest;
   logic [3:0] lsu_cdb_tag;
+  
   // Common Data Bus (CDB)
   logic cdb_valid;
   logic [3:0] cdb_tag;
   logic [6:0] cdb_prd;
+
   // ============================================================================
   // PHYSICAL REGISTER BUSY TRACKING
   // ============================================================================
@@ -269,7 +273,8 @@ module OoO_top #(
     .rename_ready(rename_to_skid_ready),            
     .commit_en(commit_valid), 
     .commit_old_preg(commit_old_preg), 
-    .branch_mispredict(branch_mispredict)
+    .branch_mispredict(branch_mispredict),
+    .mispredict_tag(branch_cdb_tag) // UPDATED: Pass the mispredicting tag
   );
 
   assign rename_to_skid_pc       = skid_to_rename_pc;
@@ -542,7 +547,7 @@ module OoO_top #(
       .i_prd(lsu_issue_prd), 
       .i_rob_tag(lsu_issue_rob_tag),
       .i_stall(lsu_stall),
-      .i_alu_op(lsu_issue_op), // CONNECTED NEW INPUT
+      .i_alu_op(lsu_issue_op),
       .o_ready(lsu_ready_to_rs),
       .o_data(lsu_wb_data), 
       .o_prd(lsu_wb_dest), 
