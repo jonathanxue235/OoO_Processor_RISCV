@@ -23,12 +23,32 @@ module trace_tb;
     // =========================================================================
     // 1. Trace Loading & Execution Control
     // =========================================================================
+    
+    // Cycle Counting Variables
+    longint start_time;
+    longint last_commit_time;
+    longint total_cycles;
+    
+    // Explicit Done Signal (for Waveforms/Debugging)
+    logic program_done;
+    assign program_done = (dut.fetch_to_skid_instr == 32'h00000013 && 
+                           dut.decode_to_skid_valid == 1'b0 && 
+                           dut.rename_to_skid_valid == 1'b0 &&
+                           dut.skid_to_dispatch_valid == 1'b0 &&
+                           dut.rob_inst.count == 0);
+
+    // Track the timestamp of the very last successful commit
+    always @(posedge clk) begin
+        if (dut.commit_valid) begin
+            last_commit_time = $time;
+        end
+    end
+
     initial begin
         int fd, status;
         logic [7:0] b0, b1, b2, b3; // Byte buffers
         logic [31:0] instr;
         int i;
-        longint start_time, end_time, total_cycles;
 
         $display("=============================================");
         $display("   OoO RISC-V Processor Testbench Setup");
@@ -42,10 +62,11 @@ module trace_tb;
         $display("[TB] Initialized %0d memory locations.", i);
 
         // 2. Load Instruction Memory from file
+        // NOTE: Change this filename to test different traces (e.g., 25instMem-jswr.txt)
         $display("[TB] Loading '25instMem-r.txt'...");
         fd = $fopen("25instMem-r.txt", "r");
         if (fd == 0) begin
-            $display("[TB] Error: Could not open '25instMem-jswr.txt'.");
+            $display("[TB] Error: Could not open trace file.");
             $finish;
         end
 
@@ -69,26 +90,30 @@ module trace_tb;
         rst = 1;
         repeat(10) @(posedge clk);
         rst = 0;
-        $display("[TB] Reset Released. Processor Running...");
         
-        // Record Start Time
+        // Start Timer
         start_time = $time;
+        last_commit_time = $time; // Initialize to start in case of no commits
+        $display("[TB] Reset Released. Processor Running...");
 
         // 4. Execution Phase
-        // Wait for pipeline to drain completely (Optimal Termination)
+        // Wait for pipeline to drain completely using the Done signal
         wait_for_completion();
-        
-        // Record End Time
-        end_time = $time;
-        total_cycles = (end_time - start_time) / 10; // 10ns clock period
 
-        // 5. Report Final Results
+        // 5. Calculate Metrics
+        // We use last_commit_time to exclude the cycles spent draining the pipeline 
+        // after the final instruction retired.
+        total_cycles = (last_commit_time - start_time) / 10; // 10ns clock period
+
+        // 6. Report Final Results
         report_results();
-        
+
         $display("\n=============================================");
         $display("   PERFORMANCE METRICS");
         $display("=============================================");
-        $display("   Total Execution Cycles: %0d", total_cycles);
+        $display("   Start Time       : %0t", start_time);
+        $display("   Last Commit Time : %0t", last_commit_time);
+        $display("   Total Cycles     : %0d", total_cycles);
         $display("=============================================");
 
         $display("[TB] Simulation Finished.");
@@ -100,7 +125,6 @@ module trace_tb;
     // 2. Helper Functions (Disassembler & Registers)
     // =========================================================================
     
-    // Helper to format register names
     function string get_reg_name(logic [4:0] r);
         $sformat(get_reg_name, "x%0d", r);
     endfunction
@@ -235,7 +259,6 @@ module trace_tb;
             string fetch_instr_str;
 
             // --- Pipeline Stage PCs ---
-            // If valid is 0, we log 0 to indicate "Empty/Bubble"
             fetch_pc    = dut.fetch_to_skid_valid    ? {23'b0, dut.fetch_to_skid_pc}    : 32'b0;
             decode_pc   = dut.decode_to_skid_valid   ? {23'b0, dut.decode_to_skid_pc}   : 32'b0;
             rename_pc   = dut.rename_to_skid_valid   ? {23'b0, dut.rename_to_skid_pc}   : 32'b0;
@@ -252,13 +275,13 @@ module trace_tb;
             alu_pc      = dut.alu_issue_valid    ? dut.alu_issue_pc    : 32'b0;
             br_pc       = dut.branch_issue_valid ? dut.branch_issue_pc : 32'b0;
             lsu_pc      = dut.lsu_issue_valid    ? dut.lsu_issue_pc    : 32'b0;
-            
+
             // --- Writeback & Commit ---
             if (dut.cdb_valid) 
                 wb_pc = dut.rob_inst.rob_mem[dut.cdb_tag].pc;
             else 
                 wb_pc = 32'b0;
-            
+
             if (dut.commit_valid) 
                 commit_pc = dut.rob_inst.rob_mem[dut.commit_tag].pc;
             else 
@@ -277,7 +300,7 @@ module trace_tb;
                 wb_pc[8:0],       
                 commit_pc[8:0]    
             );
-            
+
             // Write Register Values
             for (int i = 0; i < 32; i++) begin
                 $fwrite(log_fd, " %8h |", get_reg_value(i));
@@ -290,29 +313,18 @@ module trace_tb;
     // 4. Tasks (Completion Wait & Reporting)
     // =========================================================================
     
-    // Optimal Termination Logic
     task wait_for_completion();
         int timeout_cycles = 0;
         int max_cycles = 100000;
 
-        $display("[TB] Waiting for program completion (All pipeline stages invalid + Fetching NOP + ROB Empty)...");
-
+        $display("[TB] Waiting for program completion (Monitor 'program_done' signal)...");
+        
         while (timeout_cycles < max_cycles) begin
             @(posedge clk);
             
-            // TERMINATION CONDITION:
-            // 1. Fetcher is seeing NOPs (0x00000013)
-            // 2. Decode Stage is Invalid (valid=0 implies PC=0 in logs)
-            // 3. Rename Stage is Invalid
-            // 4. Dispatch Stage is Invalid
-            // 5. ROB Count is 0 (Crucial! Ensures backend is completely drained)
-            if (dut.fetch_to_skid_instr == 32'h00000013 && 
-                dut.decode_to_skid_valid == 1'b0 && 
-                dut.rename_to_skid_valid == 1'b0 &&
-                dut.skid_to_dispatch_valid == 1'b0 &&
-                dut.rob_inst.count == 0) begin
-                
-                $display("[TB] Pipeline Drained. Program Completed at %0t.", $time);
+            // Check the explicit done signal constructed at the top of the file
+            if (program_done) begin
+                $display("[TB] Program Done signal asserted at %0t.", $time);
                 // Allow a few extra cycles for final signals to settle (waveforms)
                 repeat(10) @(posedge clk);
                 return;
